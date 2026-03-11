@@ -1,4 +1,4 @@
-# Compilator Assignments
+# Compiler Assignments
 ## Intro
 *Assignments for the Compilers course exam, creating the middle-end and back-end of a compiler; we will use LLVM and the C++ programming language*
 

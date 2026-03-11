@@ -11,8 +11,58 @@
 #include <llvm-19/llvm/IR/Operator.h>
 #include <llvm-19/llvm/IR/Value.h>
 #include <llvm-19/llvm/Support/Casting.h>
+#include <functional>  // std::function (per Predicate e Builder)
+#include <map>         // std::map (per identityMap)
+#include <vector>      // std::vector (per mulReductions)
+#include <utility>     // std::pair (per la coppia Instruction*, Instruction*)
 
 using namespace llvm;
+
+/*
+AlgebraicIdentity --> map<opcode, predicate>
+ */
+using Predicate = std::function<bool(const ConstantInt*)>;
+using Identity = std::map<unsigned, Predicate>;
+
+Identity identityMap = {
+    {Instruction::Add, [](const ConstantInt* c) { return c->isZero(); }},
+    {Instruction::Mul, [](const ConstantInt* c) { return c->isOne();  }},
+};
+
+
+/***   StrengthReduction --> vector<pair<predicate, builder>> ****/
+using Builder = std::function
+    std::pair<Instruction*, Instruction*>(Value*, ConstantInt*)>;
+
+std::vector<std::pair<Predicate, Builder>> mulReductions = {
+    {
+        [](const ConstantInt* c) { return c->getValue().isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), c->getValue().logBase2()));
+            return {shl, nullptr};
+        }
+    },
+    {
+        [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
+            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
+            return {shl, sub};
+        }
+    },
+    {
+        [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
+            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
+            return {shl, add};
+        }
+    },
+};
+
 
 namespace {
 
@@ -26,6 +76,7 @@ struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity> {
 
 bool runOnBasicBlock(BasicBlock &B) {
   
+  /*
   for (auto iter = B.begin(); iter != B.end();)
   {
     Instruction& instr = *iter;
@@ -79,7 +130,23 @@ bool runOnBasicBlock(BasicBlock &B) {
 
     }
   }
+  */
 
+  for (auto& instr : B) {
+    auto it = identityMap.find(instr.getOpcode());
+    if (it == identityMap.end()) continue;
+
+    for (int i : {0, 1}) {  //0 add e 1 Mul
+        if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
+            if (it->second(c)) {
+                instr.replaceAllUsesWith(instr.getOperand(1 - i));
+                instr.eraseFromParent();
+                break;
+            }
+        }
+    }
+}
+  
   return true;
 }
 
@@ -109,7 +176,7 @@ struct StrengthReduction: PassInfoMixin<StrengthReduction> {
 }
 
 bool runOnBasicBlock(BasicBlock &B) {
-  
+  /*
   for (auto iter = B.begin(); iter != B.end();)
     {
       Instruction& instr = *iter;
@@ -182,7 +249,19 @@ bool runOnBasicBlock(BasicBlock &B) {
         }
       }
     }
+      */
 
+  for (auto& [pred, build] : mulReductions) {
+      if (!pred(const_value)) continue;
+      
+      auto [first, second] = build(variable_value, const_value);
+      first->insertAfter(&instr);
+      auto* replace = first;
+      if (second) { second->insertAfter(first); replace = second; }
+      instr.replaceAllUsesWith(replace);
+      instr.eraseFromParent();
+      break;
+  }
   return true;
 }
 
