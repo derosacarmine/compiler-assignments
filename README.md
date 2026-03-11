@@ -25,3 +25,7 @@ write a new Back-end.
     - Determine whether it is safe and desirable to apply a transformation
 - Code transformation
     - Experimental validation (and the process is repeated)
+
+# Contributors
+- [Carmine De Rosa](https://github.com/derosacarmine/)
+- [Manuel Gherardi](https://github.com/GHManu)
