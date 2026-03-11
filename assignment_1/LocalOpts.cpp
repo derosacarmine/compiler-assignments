@@ -18,56 +18,28 @@
 
 using namespace llvm;
 
-/*
-AlgebraicIdentity --> map<opcode, predicate>
- */
-using Predicate = std::function<bool(const ConstantInt*)>;
-using Identity = std::map<unsigned, Predicate>;
+using Predicate = std::function<bool(const ConstantInt*)>; // boolean function
+using Identity = std::map<unsigned, Predicate>; //maps an opcode to the needed boolean function to check for Algebraic identity
+using Builder = std::function<
+    std::pair<Instruction*, Instruction*>(Value*, ConstantInt*)>; //function that returns a pair of instructions
 
-Identity identityMap = {
-    {Instruction::Add, [](const ConstantInt* c) { return c->isZero(); }},
-    {Instruction::Mul, [](const ConstantInt* c) { return c->isOne();  }},
-};
-
-
-/***   StrengthReduction --> vector<pair<predicate, builder>> ****/
-using Builder = std::function
-    std::pair<Instruction*, Instruction*>(Value*, ConstantInt*)>;
-
-std::vector<std::pair<Predicate, Builder>> mulReductions = {
-    {
-        [](const ConstantInt* c) { return c->getValue().isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), c->getValue().logBase2()));
-            return {shl, nullptr};
-        }
-    },
-    {
-        [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
-            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
-            return {shl, sub};
-        }
-    },
-    {
-        [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
-            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
-            return {shl, add};
-        }
-    },
-};
 
 
 namespace {
 
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
+
+/*
+AlgebraicIdentity --> map<opcode, predicate>
+ */
+
+Identity identityMap = {
+    {Instruction::Add, [](const ConstantInt* c) -> bool { return c->isZero(); }},
+    {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();  }},
+};
+
+
+PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
 
   	runOnFunction(F);
 
@@ -132,7 +104,10 @@ bool runOnBasicBlock(BasicBlock &B) {
   }
   */
 
-  for (auto& instr : B) {
+  for (auto instr_it = B.begin(); instr_it != B.end();) {
+    Instruction& instr = *instr_it;
+    instr_it++;
+  
     auto it = identityMap.find(instr.getOpcode());
     if (it == identityMap.end()) continue;
 
@@ -168,7 +143,40 @@ bool runOnFunction(Function &F) {
 
 //STRENGTH REDUCTION
 struct StrengthReduction: PassInfoMixin<StrengthReduction> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
+
+// maps a check function for SR (Predicate) to a function that receive returns a pair of instructions (Builder) that replace the original "mul" instruction
+/* vector<pair<predicate, builder>> */
+std::vector<std::pair<Predicate, Builder>> mulReductions = {
+    {
+        [](const ConstantInt* c) -> bool { return c->getValue().isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), c->getValue().logBase2()));
+            return {shl, nullptr};
+        }
+    },
+    {
+        [](const ConstantInt* c) -> bool { return (c->getValue()+1).isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
+            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
+            return {shl, sub};
+        }
+    },
+    {
+        [](const ConstantInt* c) -> bool { return (c->getValue()-1).isPowerOf2(); },
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
+            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
+            return {shl, add};
+        }
+    },
+};
+
+
+PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
 
   	runOnFunction(F);
 
@@ -250,21 +258,55 @@ bool runOnBasicBlock(BasicBlock &B) {
       }
     }
       */
+  for (auto instr_iter = B.begin(); instr_iter != B.end();)
+  {
+    Instruction &instr = *instr_iter;
+    instr_iter++;
 
-  for (auto& [pred, build] : mulReductions) {
-      if (!pred(const_value)) continue;
+    if (instr.getNumOperands() != 2) continue;
+  
+    int opCode = instr.getOpcode();
+
+    Value* operand1 = instr.getOperand(0);
+    Value* operand2 = instr.getOperand(1);
+    ConstantInt* const_value1 = dyn_cast<ConstantInt>(operand1);
+    ConstantInt* const_value2 = dyn_cast<ConstantInt>(operand2);
+    Instruction* first=nullptr, *second=nullptr; 
+
+    if(opCode == Instruction::SDiv && const_value2 && const_value2->getValue().isPowerOf2()){
+      first = BinaryOperator::Create(Instruction::AShr, operand1,
+                ConstantInt::get(const_value2->getType(), const_value2->getValue().logBase2()));
+    }
+    else if(opCode == Instruction::Mul){
       
-      auto [first, second] = build(variable_value, const_value);
-      first->insertAfter(&instr);
-      auto* replace = first;
-      if (second) { second->insertAfter(first); replace = second; }
-      instr.replaceAllUsesWith(replace);
-      instr.eraseFromParent();
-      break;
+      ConstantInt* constantVal = const_value1 ? const_value1 : (const_value2 ? const_value2 : nullptr);
+      if(constantVal == nullptr) continue;
+
+      Value* variableValue = constantVal == const_value1 ? operand2 : operand1;
+
+      for (auto& [pred, build] : mulReductions) {
+        if (!pred(constantVal)) continue;
+        
+        //auto [first, second] = build(variableValue, constantVal);
+        auto newInstructions = build(variableValue, constantVal);
+        first = newInstructions.first;
+        second = newInstructions.second;
+        break;
+      }
+    }
+
+    if(first == nullptr) continue;
+
+    first->insertAfter(&instr);
+    auto* replace = first;
+    if (second) { second->insertAfter(first); replace = second; }
+    instr.replaceAllUsesWith(replace);
+    instr.eraseFromParent();
+    
   }
+  
   return true;
 }
-
 
 bool runOnFunction(Function &F) {
   bool Transformed = false;
