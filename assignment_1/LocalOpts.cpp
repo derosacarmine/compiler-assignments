@@ -29,7 +29,39 @@ using Builder = function<
 
 namespace {
 
-struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity> {
+  /* common struct for common methods */
+struct Common {
+    virtual bool runOnBasicBlock(BasicBlock &B) = 0;
+    
+    PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
+
+  	runOnFunction(F);
+
+  	return PreservedAnalyses::all();
+}
+
+    /*
+  for each basic block of the fz it calls runOnBasickBlock
+  */
+  bool runOnFunction(Function &F) {
+    bool Transformed = false;
+
+    for (auto Iter = F.begin(); Iter != F.end(); ++Iter) {
+      if (runOnBasicBlock(*Iter)) {
+        Transformed = true;
+      }
+    }
+
+    return Transformed;
+  }
+    static bool isRequired() { return true; }
+
+
+
+};
+
+
+struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
 /*
 AlgebraicIdentity --> map<opcode, predicate>
@@ -43,12 +75,6 @@ Identity identityMap = {
 };
 
 
-PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-
-  	runOnFunction(F);
-
-  	return PreservedAnalyses::all();
-}
 
 
 /*
@@ -58,7 +84,7 @@ If they're constant, it checks whether it's zero (in the case of adding) or
 1 (in the case of multiplying) and replaces the result of the operation
 with the variable operand.
  */
-bool runOnBasicBlock(BasicBlock &B) {
+bool runOnBasicBlock(BasicBlock &B) override {
   
   for (auto instr_it = B.begin(); instr_it != B.end();) {
     Instruction& instr = *instr_it;
@@ -91,27 +117,13 @@ bool runOnBasicBlock(BasicBlock &B) {
   
   return true;
 }
-/*
-for each basic block of the fz it calls runOnBasickBlock
- */
-bool runOnFunction(Function &F) {
-  bool Transformed = false;
 
-  for (auto Iter = F.begin(); Iter != F.end(); ++Iter) {
-    if (runOnBasicBlock(*Iter)) {
-      Transformed = true;
-    }
-  }
-
-  return Transformed;
-}
-  static bool isRequired() { return true; }
 };
 
 
 
 //STRENGTH REDUCTION
-struct StrengthReduction: PassInfoMixin<StrengthReduction> {
+struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
 // maps a check function for SR (Predicate) to a function 
 // that receive returns a pair of instructions (Builder) 
@@ -147,14 +159,7 @@ vector<pair<Predicate, Builder>> mulReductions = {
 };
 
 
-PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
-
-  	runOnFunction(F);
-
-  	return PreservedAnalyses::all();
-}
-
-bool runOnBasicBlock(BasicBlock &B) {
+bool runOnBasicBlock(BasicBlock &B) override {
   
   for (auto instr_iter = B.begin(); instr_iter != B.end();)
   {
@@ -206,23 +211,16 @@ bool runOnBasicBlock(BasicBlock &B) {
   return true;
 }
 
-bool runOnFunction(Function &F) {
-  bool Transformed = false;
-
-  for (auto Iter = F.begin(); Iter != F.end(); ++Iter) {
-    if (runOnBasicBlock(*Iter)) {
-      Transformed = true;
-    }
-  }
-
-  return Transformed;
-}
-
-  static bool isRequired() { return true; }
 };
 
-} 
+struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
+    bool runOnBasicBlock(BasicBlock &B) override {
+      return false;
+    }
+};
 
+
+}
 
 llvm::PassPluginLibraryInfo getLocalOptsPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "LocalOpts", LLVM_VERSION_STRING,
@@ -236,6 +234,10 @@ llvm::PassPluginLibraryInfo getLocalOptsPluginInfo() {
                   }
                   else if (Name == "strength-reduction"){
                     FPM.addPass(StrengthReduction());
+                    return true;
+                  }
+                  else if(Name == "multi-instruction"){
+                    FPM.addPass(MultiInstruction());
                     return true;
                   }
                   return false;
