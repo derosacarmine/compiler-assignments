@@ -69,12 +69,13 @@ AlgebraicIdentity --> map<opcode, predicate>
 
 Identity identityMap = {
     {Instruction::Add, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();  }},
     {Instruction::Sub, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::SDiv, [](const ConstantInt* c) -> bool { return c->isOne();  }},
+    {Instruction::AShr, [](const ConstantInt* c) -> bool { return c->isZero(); }},
+    {Instruction::LShr, [](const ConstantInt* c) -> bool { return c->isZero();}},
+    {Instruction::Shl, [](const ConstantInt* c) -> bool { return c->isZero();}},
+    {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();}},
+    {Instruction::SDiv, [](const ConstantInt* c) -> bool { return c->isOne();}},
 };
-
-
 
 
 /*
@@ -90,20 +91,20 @@ bool runOnBasicBlock(BasicBlock &B) override {
     Instruction& instr = *instr_it;
     instr_it++;
   
-    auto it = identityMap.find(instr.getOpcode());
+    int opCode = instr.getOpcode();
+
+    auto it = identityMap.find(opCode);
     if (it == identityMap.end()) continue;
 
-    // Value* operand1 = instr.getOperand(0);
-    // Value* operand2 = instr.getOperand(1);
-    int opCode = it->first;
     set<int> var;
 
     if(opCode == Instruction::Add || opCode == Instruction::Mul)
       var = {0,1};
-    else if (opCode == Instruction::Sub || opCode == Instruction::SDiv)
+    else if (opCode == Instruction::Sub || opCode == Instruction::SDiv || opCode == Instruction::AShr || opCode == Instruction::LShr ||
+                opCode == Instruction::Shl)
       var = {1};
 
-    for (int i : var) {  //0 add e 1 Mul
+    for (int i : var) {
         if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
             if (it->second(c)) {
                 instr.replaceAllUsesWith(instr.getOperand(1 - i));
@@ -111,9 +112,8 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 break;
             }
         }
-      }
-    
-}
+      }  
+  }
   
   return true;
 }
