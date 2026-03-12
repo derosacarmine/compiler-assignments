@@ -17,11 +17,12 @@
 #include <utility>     // std::pair (per la coppia Instruction*, Instruction*)
 
 using namespace llvm;
+using namespace std;
 
-using Predicate = std::function<bool(const ConstantInt*)>; // boolean function
-using Identity = std::map<unsigned, Predicate>; //maps an opcode to the needed boolean function to check for Algebraic identity
-using Builder = std::function<
-    std::pair<Instruction*, Instruction*>(Value*, ConstantInt*)>; //function that returns a pair of instructions
+using Predicate = function<bool(const ConstantInt*)>; // boolean function
+using Identity = map<unsigned, Predicate>; //maps an opcode to the needed boolean function to check for Algebraic identity
+using Builder = function<
+    pair<Instruction*, Instruction*>(Value*, ConstantInt*)>; //function that returns a pair of instructions
 
 
 
@@ -46,6 +47,14 @@ PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
   	return PreservedAnalyses::all();
 }
 
+
+/*
+It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
+and checks whether the two operands are constant or variable.
+If they're constant, it checks whether it's zero (in the case of adding) or
+1 (in the case of multiplying) and replaces the result of the operation
+with the variable operand.
+ */
 bool runOnBasicBlock(BasicBlock &B) {
   
   for (auto instr_it = B.begin(); instr_it != B.end();) {
@@ -68,7 +77,9 @@ bool runOnBasicBlock(BasicBlock &B) {
   
   return true;
 }
-
+/*
+for each basic block of the fz it calls runOnBasickBlock
+ */
 bool runOnFunction(Function &F) {
   bool Transformed = false;
 
@@ -88,9 +99,11 @@ bool runOnFunction(Function &F) {
 //STRENGTH REDUCTION
 struct StrengthReduction: PassInfoMixin<StrengthReduction> {
 
-// maps a check function for SR (Predicate) to a function that receive returns a pair of instructions (Builder) that replace the original "mul" instruction
+// maps a check function for SR (Predicate) to a function 
+// that receive returns a pair of instructions (Builder) 
+// that replace the original "mul" instruction
 /* vector<pair<predicate, builder>> */
-std::vector<std::pair<Predicate, Builder>> mulReductions = {
+vector<pair<Predicate, Builder>> mulReductions = {
     {
         [](const ConstantInt* c) -> bool { return c->getValue().isPowerOf2(); },
         [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
