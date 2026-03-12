@@ -87,5 +87,3 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
     echo "   [OK] Completed."
 
 done
-
-echo "--- Fine ---"
