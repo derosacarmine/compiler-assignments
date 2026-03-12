@@ -13,6 +13,7 @@
 #include <llvm-19/llvm/Support/Casting.h>
 #include <functional>  // std::function (per Predicate e Builder)
 #include <map>         // std::map (per identityMap)
+#include <set>
 #include <vector>      // std::vector (per mulReductions)
 #include <utility>     // std::pair (per la coppia Instruction*, Instruction*)
 
@@ -37,6 +38,8 @@ AlgebraicIdentity --> map<opcode, predicate>
 Identity identityMap = {
     {Instruction::Add, [](const ConstantInt* c) -> bool { return c->isZero(); }},
     {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();  }},
+    {Instruction::Sub, [](const ConstantInt* c) -> bool { return c->isZero(); }},
+    {Instruction::SDiv, [](const ConstantInt* c) -> bool { return c->isOne();  }},
 };
 
 
@@ -64,7 +67,17 @@ bool runOnBasicBlock(BasicBlock &B) {
     auto it = identityMap.find(instr.getOpcode());
     if (it == identityMap.end()) continue;
 
-    for (int i : {0, 1}) {  //0 add e 1 Mul
+    // Value* operand1 = instr.getOperand(0);
+    // Value* operand2 = instr.getOperand(1);
+    int opCode = it->first;
+    set<int> var;
+
+    if(opCode == Instruction::Add || opCode == Instruction::Mul)
+      var = {0,1};
+    else if (opCode == Instruction::Sub || opCode == Instruction::SDiv)
+      var = {1};
+
+    for (int i : var) {  //0 add e 1 Mul
         if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
             if (it->second(c)) {
                 instr.replaceAllUsesWith(instr.getOperand(1 - i));
@@ -72,7 +85,8 @@ bool runOnBasicBlock(BasicBlock &B) {
                 break;
             }
         }
-    }
+      }
+    
 }
   
   return true;
