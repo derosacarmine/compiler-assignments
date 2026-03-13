@@ -16,38 +16,40 @@ Eliminates useless operations based on algebraic identity rules:
 
 #### **Single costant identities**
 
-In these cases, if a constant operand has a specific value (such as 0 or 1), an entire instruction can be substituted by the variable operand.
+In these cases, if a constant operand has a specific value (such as 0 or 1), an entire instruction can be substituted a variable or constant.
 
 *   **Zero addition:** `x + 0 = x`, `0 + x = x`.
     
 *   **Zero subtraction:** `x - 0 = x`.
+
+*   **Multiplication by 0:** `x * 0 = 0` o `0 * x = 0`.
     
-*   **Multiplication by 1:** `x \* 1 = x`, `1 \* x = x`.
+*   **Multiplication by 1:** `x * 1 = x`, `1 * x = x`.
     
 *   **Division by one:** `x / 1 = x`.
     
 *   **Shift (Left, Logical Right, Arithmetic Right) by zero:** `x << 0 = x`, `x >> 0 = x`.
     
-*   **Bitwise AND by -1:** `x & -1 = x`.
+*   **Bitwise AND by -1 and 0:** `x & -1 = x`, `x & 0 = 0`.
     
 *   **Bitwise OR/XOR by zero:** `x | 0 = x`, `x ^ 0 = x`.
+
+*   **Modulo by 1:** `x % 1 = 0`.
     
 
-#### **Identities with the same operands or substitution with a constant value**
+#### **Identities with the same operands**
 
-In these cases, an instruction can be replaced if the two operands are the same or specific constants are present.
+In these cases, an instruction can be replaced if the two operands are the same.
 
-*   **Same value subtraction:** `x - x = 0`.
+*   **Identical operands subtraction:** `x - x = 0`.
     
-*   **Same value division:** `x / x = 1`.
+*   **Identical operands division:** `x / x = 1`.
     
 *   **Identical operands in bitwise AND/OR:** `x & x = x`, `x | x = x`.
     
-*   **Same value XOR:** `x ^ x = 0`.
-    
-*   **Multiplication by zero:** `x \* 0 = 0` o `0 \* x = 0`.
-    
-*   **Modulo by zero or between the same operands:** `x % x = 0`, `x % 1 = 0`.
+*   **Identical operands  XOR:** `x ^ x = 0`.
+
+*   **Identical operands in modulo:** `x % x = 0`.
 
 ---
 
