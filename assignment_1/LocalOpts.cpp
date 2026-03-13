@@ -11,25 +11,22 @@
 #include <llvm-19/llvm/IR/Operator.h>
 #include <llvm-19/llvm/IR/Value.h>
 #include <llvm-19/llvm/Support/Casting.h>
-#include <functional>  // std::function (per Predicate e Builder)
-#include <map>         // std::map (per identityMap)
+#include <functional>
+#include <map>
 #include <set>
-#include <vector>      // std::vector (per mulReductions)
-#include <utility>     // std::pair (per la coppia Instruction*, Instruction*)
+#include <vector>
+#include <utility>
 
 using namespace llvm;
 using namespace std;
 
-using Predicate = function<bool(const ConstantInt*)>; // boolean function
-using Identity = map<unsigned, Predicate>; //maps an opcode to the needed boolean function to check for Algebraic identity
-using Builder = function<
-    pair<Instruction*, Instruction*>(Value*, ConstantInt*)>; //function that returns a pair of instructions
-
-
+// boolean fun
+using Predicate = function<bool(const ConstantInt*)>;
+using Builder = function<pair<Instruction*, Instruction*>(Value*, ConstantInt*)>;
 
 namespace {
 
-  /* common struct for common methods */
+  /* struct for common methods */
 struct Common {
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
@@ -40,7 +37,7 @@ struct Common {
   	return PreservedAnalyses::all();
 }
 
-    /*
+  /*
   for each basic block of the fz it calls runOnBasickBlock
   */
   bool runOnFunction(Function &F) {
@@ -63,18 +60,40 @@ struct Common {
 
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
-/*
-AlgebraicIdentity --> map<opcode, predicate>
- */
-
-Identity identityMap = {
+// map used to simplify identities which depends on a single operand (the constant value) and can be replaced by other operand
+map<unsigned, Predicate> singleOperandMap = {
     {Instruction::Add, [](const ConstantInt* c) -> bool { return c->isZero(); }},
     {Instruction::Sub, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::AShr, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::LShr, [](const ConstantInt* c) -> bool { return c->isZero();}},
+    {Instruction::AShr, [](const ConstantInt* c) -> bool { return c->isZero(); }}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
+    {Instruction::LShr, [](const ConstantInt* c) -> bool { return c->isZero();}}, // Logical right shifts fill vacated positions with 0s
     {Instruction::Shl, [](const ConstantInt* c) -> bool { return c->isZero();}},
     {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();}},
     {Instruction::SDiv, [](const ConstantInt* c) -> bool { return c->isOne();}},
+    {Instruction::And, [](const ConstantInt* c) -> bool { return c->isMinusOne();}},
+    {Instruction::Or, [](const ConstantInt* c) -> bool { return c->isZero();}},
+    {Instruction::Xor, [](const ConstantInt* c) -> bool { return c->isZero();}}
+};
+
+// map used to simplify identities which depends on both operands or that can be replaced by a costant (or both)
+map<unsigned, function<Value*(Value*, Value*)>> pairOperandMap = {
+    {Instruction::Sub, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr;}},
+    {Instruction::SDiv, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 1); else return nullptr; }},
+    {Instruction::And, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
+    {Instruction::Or, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
+    {Instruction::Xor, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr; }},
+    {Instruction::URem, [](Value* op1, Value* op2) -> Value* { 
+        if(op1 == op2) return ConstantInt::get(op1->getType(), 0); 
+        if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isOne()) return ConstantInt::get(op1->getType(), 0);
+        return nullptr;
+    }},
+    {Instruction::SRem, [](Value* op1, Value* op2) -> Value* { 
+        if(op1 == op2) return ConstantInt::get(op1->getType(), 0); 
+        if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isOne()) return ConstantInt::get(op1->getType(), 0);
+        return nullptr;}},   
+    {Instruction::Mul, [](Value* op1, Value* op2) -> Value* { 
+    if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isZero()) return ConstantInt::get(op1->getType(), 0);
+    if(auto c1 = dyn_cast<ConstantInt>(op1)) if(c1->isZero()) return ConstantInt::get(op2->getType(), 0);
+    return nullptr;}}
 };
 
 
@@ -91,22 +110,36 @@ bool runOnBasicBlock(BasicBlock &B) override {
     Instruction& instr = *instr_it;
     instr_it++;
   
+    if (instr.getNumOperands() != 2) continue;
+
     int opCode = instr.getOpcode();
+    Value* op1 = instr.getOperand(0);
+    Value* op2 = instr.getOperand(1);
 
-    auto it = identityMap.find(opCode);
-    if (it == identityMap.end()) continue;
+    auto pairIt = pairOperandMap.find(opCode);
+    if (pairIt != pairOperandMap.end()) {
+      if(auto replacement = pairIt->second(op1, op2)){
+        instr.replaceAllUsesWith(replacement);
+        instr.eraseFromParent();
+        continue;
+      }
+    }
 
-    set<int> var;
+    auto singleIt = singleOperandMap.find(opCode);
+    if (singleIt == singleOperandMap.end()) continue;
 
-    if(opCode == Instruction::Add || opCode == Instruction::Mul)
-      var = {0,1};
+    vector<int> usableOperands;
+
+    if(opCode == Instruction::Add || opCode == Instruction::Mul || opCode == Instruction::Or || opCode == Instruction::And || 
+                opCode == Instruction::Xor)
+      usableOperands = {0,1};
     else if (opCode == Instruction::Sub || opCode == Instruction::SDiv || opCode == Instruction::AShr || opCode == Instruction::LShr ||
                 opCode == Instruction::Shl)
-      var = {1};
+      usableOperands = {1};
 
-    for (int i : var) {
+    for (int i : usableOperands) {
         if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
-            if (it->second(c)) {
+            if (singleIt->second(c)) {
                 instr.replaceAllUsesWith(instr.getOperand(1 - i));
                 instr.eraseFromParent();
                 break;
@@ -132,27 +165,27 @@ struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 vector<pair<Predicate, Builder>> mulReductions = {
     {
         [](const ConstantInt* c) -> bool { return c->getValue().isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
                 ConstantInt::get(c->getType(), c->getValue().logBase2()));
             return {shl, nullptr};
         }
     },
     {
         [](const ConstantInt* c) -> bool { return (c->getValue()+1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
                 ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
-            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
+            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, usableOperands);
             return {shl, sub};
         }
     },
     {
         [](const ConstantInt* c) -> bool { return (c->getValue()-1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
                 ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
-            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
+            auto* add = BinaryOperator::Create(Instruction::Add, shl, usableOperands);
             return {shl, add};
         }
     },
