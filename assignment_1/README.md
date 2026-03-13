@@ -1,15 +1,9 @@
 # First Assignment
 ## Purpose
 Implement three LLVM passes that achieve the following optimizations:
-1. ***Algebraic Identity:***
-$$ 𝑥 + 0 = 0 + 𝑥 ⇒𝑥 $$
-$$ 𝑥 × 1 = 1 × 𝑥 ⇒𝑥 $$
-2. ***Strength Reduction (more advanced):***
-    $$ 15 × 𝑥 = 𝑥 × 15 ⇒ (𝑥 ≪ 4) – x $$
-    $$ y = x / 8 ⇒ y = x >> 3 $$
-3. ***Multi-Instruction Optimization:***
-    $$ 𝑎 = 𝑏 + 1, 𝑐 = 𝑎 − 1 ⇒𝑎 = 𝑏 + 1, 𝑐 = b $$
-
+1. ***Algebraic Identity***
+2. ***Strength Reduction***
+3. ***Multi-Instruction Optimization***
 ## Code Explanation
 
 This is an **LLVM compiler plugin** that implements two optimization passes operating on LLVM's Intermediate Representation (IR).
@@ -20,13 +14,40 @@ This is an **LLVM compiler plugin** that implements two optimization passes oper
 
 Eliminates useless operations based on algebraic identity rules:
 
-**Addition with zero:** `x + 0 = x` or `0 + x = x`
-- If one operand is the constant `0`, the instruction is replaced directly with the other operand.
+#### **Single costant identities**
 
-**Multiplication by one:** `x * 1 = x` or `1 * x = x`
-- Same logic: if one operand is `1`, the other is used directly.
+In these cases, if a constant operand has a specific value (such as 0 or 1), an entire instruction can be substituted by the variable operand.
 
-In both cases, the original instruction is removed with `eraseFromParent()`.
+*   **Zero addition:** `x + 0 = x`, `0 + x = x`.
+    
+*   **Zero subtraction:** `x - 0 = x`.
+    
+*   **Multiplication by 1:** `x \* 1 = x`, `1 \* x = x`.
+    
+*   **Division by one:** `x / 1 = x`.
+    
+*   **Shift (Left, Logical Right, Arithmetic Right) by zero:** `x << 0 = x`, `x >> 0 = x`.
+    
+*   **Bitwise AND by -1:** `x & -1 = x`.
+    
+*   **Bitwise OR/XOR by zero:** `x | 0 = x`, `x ^ 0 = x`.
+    
+
+#### **Identities with the same operands or substitution with a constant value**
+
+In these cases, an instruction can be replaced if the two operands are the same or specific constants are present.
+
+*   **Same value subtraction:** `x - x = 0`.
+    
+*   **Same value division:** `x / x = 1`.
+    
+*   **Identical operands in bitwise AND/OR:** `x & x = x`, `x | x = x`.
+    
+*   **Same value XOR:** `x ^ x = 0`.
+    
+*   **Multiplication by zero:** `x \* 0 = 0` o `0 \* x = 0`.
+    
+*   **Modulo by zero or between the same operands:** `x % x = 0`, `x % 1 = 0`.
 
 ---
 
