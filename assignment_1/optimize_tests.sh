@@ -82,6 +82,7 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
         continue
     fi
 
+    opt -load-pass-plugin "$PLUGIN_PATH" -passes="mem2reg" "$LL_DIR/$filename.ll" -S -o "$LL_DIR/${filename}.ll"
     opt -load-pass-plugin "$PLUGIN_PATH" -passes="$PASS_STRING" "$LL_DIR/$filename.ll" -S -o "$OPT_DIR/${filename}_opt.ll"
 
     echo "   [OK] Completed."
