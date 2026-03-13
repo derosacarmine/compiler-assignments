@@ -60,40 +60,31 @@ struct Common {
 
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
-// map used to simplify identities which depends on a single operand (the constant value) and can be replaced by other operand
-map<unsigned, Predicate> singleOperandMap = {
-    {Instruction::Add, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::Sub, [](const ConstantInt* c) -> bool { return c->isZero(); }},
-    {Instruction::AShr, [](const ConstantInt* c) -> bool { return c->isZero(); }}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
-    {Instruction::LShr, [](const ConstantInt* c) -> bool { return c->isZero();}}, // Logical right shifts fill vacated positions with 0s
-    {Instruction::Shl, [](const ConstantInt* c) -> bool { return c->isZero();}},
-    {Instruction::Mul, [](const ConstantInt* c) -> bool { return c->isOne();}},
-    {Instruction::SDiv, [](const ConstantInt* c) -> bool { return c->isOne();}},
-    {Instruction::And, [](const ConstantInt* c) -> bool { return c->isMinusOne();}},
-    {Instruction::Or, [](const ConstantInt* c) -> bool { return c->isZero();}},
-    {Instruction::Xor, [](const ConstantInt* c) -> bool { return c->isZero();}}
+// map used to simplify identities which have a constant
+map<unsigned, function<Value*(ConstantInt*, Value*)>> constantMap = {
+    {Instruction::Add, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
+    {Instruction::Sub, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr; }},
+    {Instruction::AShr, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
+    {Instruction::LShr, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}}, // Logical right shifts fill vacated positions with 0s
+    {Instruction::Shl, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
+    {Instruction::Mul, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return v; else if(c->isZero()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
+    {Instruction::SDiv, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return v; else return nullptr;}},
+    {Instruction::And, [](ConstantInt* c, Value* v) -> Value* { if(c->isMinusOne()) return v; else if(c->isZero()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
+    {Instruction::Or, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
+    {Instruction::Xor, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
+    {Instruction::URem, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
+    {Instruction::SRem, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return ConstantInt::get(c->getType(), 0); else return nullptr;}}
 };
 
-// map used to simplify identities which depends on both operands or that can be replaced by a costant (or both)
-map<unsigned, function<Value*(Value*, Value*)>> pairOperandMap = {
+// map used to simplify identities which have two identical operands
+map<unsigned, function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::Sub, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr;}},
     {Instruction::SDiv, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 1); else return nullptr; }},
     {Instruction::And, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
     {Instruction::Or, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
     {Instruction::Xor, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr; }},
-    {Instruction::URem, [](Value* op1, Value* op2) -> Value* { 
-        if(op1 == op2) return ConstantInt::get(op1->getType(), 0); 
-        if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isOne()) return ConstantInt::get(op1->getType(), 0);
-        return nullptr;
-    }},
-    {Instruction::SRem, [](Value* op1, Value* op2) -> Value* { 
-        if(op1 == op2) return ConstantInt::get(op1->getType(), 0); 
-        if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isOne()) return ConstantInt::get(op1->getType(), 0);
-        return nullptr;}},   
-    {Instruction::Mul, [](Value* op1, Value* op2) -> Value* { 
-    if(auto c2 = dyn_cast<ConstantInt>(op2)) if(c2->isZero()) return ConstantInt::get(op1->getType(), 0);
-    if(auto c1 = dyn_cast<ConstantInt>(op1)) if(c1->isZero()) return ConstantInt::get(op2->getType(), 0);
-    return nullptr;}}
+    {Instruction::URem, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); return nullptr;}},
+    {Instruction::SRem, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); return nullptr;}},
 };
 
 
@@ -116,31 +107,32 @@ bool runOnBasicBlock(BasicBlock &B) override {
     Value* op1 = instr.getOperand(0);
     Value* op2 = instr.getOperand(1);
 
-    auto pairIt = pairOperandMap.find(opCode);
-    if (pairIt != pairOperandMap.end()) {
-      if(auto replacement = pairIt->second(op1, op2)){
+    auto varIt = variablesMap.find(opCode);
+    if (varIt != variablesMap.end()) {
+      if(auto replacement = varIt->second(op1, op2)){
         instr.replaceAllUsesWith(replacement);
         instr.eraseFromParent();
         continue;
       }
     }
 
-    auto singleIt = singleOperandMap.find(opCode);
-    if (singleIt == singleOperandMap.end()) continue;
+    auto constIt = constantMap.find(opCode);
+    if (constIt == constantMap.end()) continue;
 
-    vector<int> usableOperands;
+    vector<Value*> usableConstants;
 
     if(opCode == Instruction::Add || opCode == Instruction::Mul || opCode == Instruction::Or || opCode == Instruction::And || 
                 opCode == Instruction::Xor)
-      usableOperands = {0,1};
+      usableConstants = {op1,op2};
     else if (opCode == Instruction::Sub || opCode == Instruction::SDiv || opCode == Instruction::AShr || opCode == Instruction::LShr ||
-                opCode == Instruction::Shl)
-      usableOperands = {1};
+                opCode == Instruction::Shl || opCode == Instruction::URem || opCode == Instruction::SRem)
+      usableConstants = {op2};
 
-    for (int i : usableOperands) {
-        if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
-            if (singleIt->second(c)) {
-                instr.replaceAllUsesWith(instr.getOperand(1 - i));
+    for (Value* operand : usableConstants) {
+        Value* variable = op1 == operand ? op2 : op1;
+        if (ConstantInt* constant = dyn_cast<ConstantInt>(operand)) {
+            if (auto replacement = constIt->second(constant, variable)) {
+                instr.replaceAllUsesWith(replacement);
                 instr.eraseFromParent();
                 break;
             }
@@ -165,27 +157,27 @@ struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 vector<pair<Predicate, Builder>> mulReductions = {
     {
         [](const ConstantInt* c) -> bool { return c->getValue().isPowerOf2(); },
-        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
                 ConstantInt::get(c->getType(), c->getValue().logBase2()));
             return {shl, nullptr};
         }
     },
     {
         [](const ConstantInt* c) -> bool { return (c->getValue()+1).isPowerOf2(); },
-        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
                 ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
-            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, usableOperands);
+            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
             return {shl, sub};
         }
     },
     {
         [](const ConstantInt* c) -> bool { return (c->getValue()-1).isPowerOf2(); },
-        [](Value* usableOperands, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, usableOperands,
+        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
+            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
                 ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
-            auto* add = BinaryOperator::Create(Instruction::Add, shl, usableOperands);
+            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
             return {shl, add};
         }
     },
