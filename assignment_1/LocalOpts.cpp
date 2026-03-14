@@ -173,14 +173,12 @@ bool runOnBasicBlock(BasicBlock &B) override {
 };
 
 
-//STRENGTH REDUCTION
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
 struct mulReduction{
   function<bool(const ConstantInt*)> predicate;
-  unsigned (*shiftAmount)(const ConstantInt*);
-  std::optional<Instruction::BinaryOps> secondOp; // nullopt = solo shift
-
+  function<unsigned(const ConstantInt*)> shiftAmount;
+  std::optional<Instruction::BinaryOps> secondOp; // nullopt = only a shift is needed
 };
 
 
@@ -189,18 +187,18 @@ const vector<mulReduction> mulReductions = {
       [](const ConstantInt* c) { return c->getValue().logBase2(); },
       std::nullopt },
 
-    { [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },  // <--
+    { [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },
       [](const ConstantInt* c) { return (c->getValue()+1).logBase2(); },
       Instruction::Sub },
 
-    { [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },  // <--
+    { [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },
       [](const ConstantInt* c) { return (c->getValue()-1).logBase2(); },
       Instruction::Add },
 };
 
 // Returns {first, second} or {nullptr, nullptr} if no reduction applies
 std::pair<Instruction*, Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
-    for (auto& [pred, shift, op] : mulReductions) {
+    for (auto& [pred, shift, op] : mulReductions) {  // pred -> condition to verify, shift -> shift value for a constant (if pred is true), op -> second operation, if needed
         if (!pred(c)) continue;
         auto* shl = BinaryOperator::Create(Instruction::Shl, var,
                         ConstantInt::get(c->getType(), shift(c)));
@@ -235,7 +233,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 auto* cst = cst1 ? cst1 : cst2;
                 if (!cst) continue;
                 Value* var = cst == cst1 ? op2 : op1;
-                std::tie(first, second) = tryMulReduction(var, cst);
+                std::tie(first, second) = tryMulReduction(var, cst); // tie unpacks an std::pair
                 break;
             }
 
