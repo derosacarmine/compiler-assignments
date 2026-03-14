@@ -55,31 +55,36 @@ struct Common {
 
 };
 
-//for constantMap
-auto ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
-auto ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
-auto ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
-auto ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
-auto ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
 
-//for variableMap
-auto ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
-auto ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
-auto ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
-
-
-/*Returns a lambda that takes the list of functions and tries them in order.*/
-auto firstOf = [](vector<function<Value*(ConstantInt*, Value*)>> fns) {
-  return [fns](ConstantInt* c, Value* v) -> Value* {
-        for (auto& fn : fns)
-            if (auto* r = fn(c, v)) return r;
-        return nullptr;
-    };
-};
 
 
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
+
+//for constantMap
+function<Value*(ConstantInt* c, Value* v)> ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
+function<Value*(ConstantInt* c, Value* v)> ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
+function<Value*(ConstantInt* c, Value* v)> ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+function<Value*(ConstantInt* c, Value* v)> ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+function<Value*(ConstantInt* c, Value* v)> ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
+
+//for variableMap
+function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
+function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
+function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
+
+
+/*Returns a function that takes the list of functions and tries them in order.*/
+using Fn = function<Value*(ConstantInt*, Value*)>;
+    
+    static Fn firstOf(vector<Fn> fns) {
+        return [fns](ConstantInt* c, Value* v) -> Value* {
+            for (auto& fn : fns)
+                if (auto* r = fn(c, v)) return r;
+            return nullptr;
+        };
+    }
+  
 // map used to simplify identities which have a constant
 map<unsigned, function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::Add, ifZeroReturnV},
