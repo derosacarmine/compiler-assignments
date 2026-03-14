@@ -13,21 +13,19 @@
 #include <llvm-19/llvm/Support/Casting.h>
 #include <functional>
 #include <map>
-#include <set>
 #include <vector>
 #include <utility>
 
 using namespace llvm;
 using namespace std;
 
-// boolean fun
-using Predicate = function<bool(const ConstantInt*)>;
-using Builder = function<pair<Instruction*, Instruction*>(Value*, ConstantInt*)>;
-
 namespace {
+
+
 
   /* struct for common methods */
 struct Common {
+    /*It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.*/
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
@@ -57,34 +55,58 @@ struct Common {
 
 };
 
+//for constantMap
+auto ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
+auto ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
+auto ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+auto ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+auto ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
+
+//for variableMap
+auto ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
+auto ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
+auto ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
+
+
+/*Returns a lambda that takes the list of functions and tries them in order.*/
+auto firstOf = [](vector<function<Value*(ConstantInt*, Value*)>> fns) {
+  return [fns](ConstantInt* c, Value* v) -> Value* {
+        for (auto& fn : fns)
+            if (auto* r = fn(c, v)) return r;
+        return nullptr;
+    };
+};
+
 
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
 // map used to simplify identities which have a constant
 map<unsigned, function<Value*(ConstantInt*, Value*)>> constantMap = {
-    {Instruction::Add, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
-    {Instruction::Sub, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr; }},
-    {Instruction::AShr, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
-    {Instruction::LShr, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}}, // Logical right shifts fill vacated positions with 0s
-    {Instruction::Shl, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
-    {Instruction::Mul, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return v; else if(c->isZero()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
-    {Instruction::SDiv, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return v; else return nullptr;}},
-    {Instruction::And, [](ConstantInt* c, Value* v) -> Value* { if(c->isMinusOne()) return v; else if(c->isZero()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
-    {Instruction::Or, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
-    {Instruction::Xor, [](ConstantInt* c, Value* v) -> Value* { if(c->isZero()) return v; else return nullptr;}},
-    {Instruction::URem, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return ConstantInt::get(c->getType(), 0); else return nullptr;}},
-    {Instruction::SRem, [](ConstantInt* c, Value* v) -> Value* { if(c->isOne()) return ConstantInt::get(c->getType(), 0); else return nullptr;}}
+    {Instruction::Add, ifZeroReturnV},
+    {Instruction::Sub, ifZeroReturnV},
+    {Instruction::AShr, ifZeroReturnV}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
+    {Instruction::LShr, ifZeroReturnV}, // Logical right shifts fill vacated positions with 0s
+    {Instruction::Shl, ifZeroReturnV},
+    {Instruction::Mul, firstOf({ifOneReturnV, ifZeroReturnZero})},
+
+    {Instruction::SDiv,ifOneReturnV},
+    {Instruction::And, firstOf( {ifMinusOneReturnV, ifZeroReturnZero})},
+
+    {Instruction::Or, ifZeroReturnV},
+    {Instruction::Xor, ifZeroReturnV},
+    {Instruction::URem, ifOneReturnZero},
+    {Instruction::SRem, ifOneReturnZero}
 };
 
 // map used to simplify identities which have two identical operands
 map<unsigned, function<Value*(Value*, Value*)>> variablesMap = {
-    {Instruction::Sub, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr;}},
-    {Instruction::SDiv, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 1); else return nullptr; }},
-    {Instruction::And, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
-    {Instruction::Or, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return op1; else return nullptr; }},
-    {Instruction::Xor, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); else return nullptr; }},
-    {Instruction::URem, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); return nullptr;}},
-    {Instruction::SRem, [](Value* op1, Value* op2) -> Value* { if(op1 == op2) return ConstantInt::get(op1->getType(), 0); return nullptr;}},
+    {Instruction::Sub, ifOpsEqualReturnZero},
+    {Instruction::SDiv, ifOpsEqualReturnOne},
+    {Instruction::And, ifOpsEqualReturnOp1},
+    {Instruction::Or, ifOpsEqualReturnOp1},
+    {Instruction::Xor, ifOpsEqualReturnZero},
+    {Instruction::URem, ifOpsEqualReturnZero},
+    {Instruction::SRem, ifOpsEqualReturnZero},
 };
 
 
@@ -146,95 +168,87 @@ bool runOnBasicBlock(BasicBlock &B) override {
 };
 
 
-
 //STRENGTH REDUCTION
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
-// maps a check function for SR (Predicate) to a function 
-// that receive returns a pair of instructions (Builder) 
-// that replace the original "mul" instruction
-/* vector<pair<predicate, builder>> */
-vector<pair<Predicate, Builder>> mulReductions = {
-    {
-        [](const ConstantInt* c) -> bool { return c->getValue().isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), c->getValue().logBase2()));
-            return {shl, nullptr};
-        }
-    },
-    {
-        [](const ConstantInt* c) -> bool { return (c->getValue()+1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), (c->getValue()+1).logBase2()));
-            auto* sub = BinaryOperator::Create(Instruction::Sub, shl, var);
-            return {shl, sub};
-        }
-    },
-    {
-        [](const ConstantInt* c) -> bool { return (c->getValue()-1).isPowerOf2(); },
-        [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
-            auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                ConstantInt::get(c->getType(), (c->getValue()-1).logBase2()));
-            auto* add = BinaryOperator::Create(Instruction::Add, shl, var);
-            return {shl, add};
-        }
-    },
+struct mulReduction{
+  function<bool(const ConstantInt*)> predicate;
+  unsigned (*shiftAmount)(const ConstantInt*);
+  std::optional<Instruction::BinaryOps> secondOp; // nullopt = solo shift
+
 };
 
 
-bool runOnBasicBlock(BasicBlock &B) override {
-  
-  for (auto instr_iter = B.begin(); instr_iter != B.end();)
-  {
-    Instruction &instr = *instr_iter;
-    instr_iter++;
+const vector<mulReduction> mulReductions = {
+    { [](const ConstantInt* c) { return c->getValue().isPowerOf2(); },
+      [](const ConstantInt* c) { return c->getValue().logBase2(); },
+      std::nullopt },
 
-    if (instr.getNumOperands() != 2) continue;
-  
-    int opCode = instr.getOpcode();
+    { [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },  // <--
+      [](const ConstantInt* c) { return (c->getValue()+1).logBase2(); },
+      Instruction::Sub },
 
-    Value* operand1 = instr.getOperand(0);
-    Value* operand2 = instr.getOperand(1);
-    ConstantInt* const_value1 = dyn_cast<ConstantInt>(operand1);
-    ConstantInt* const_value2 = dyn_cast<ConstantInt>(operand2);
-    Instruction* first=nullptr, *second=nullptr; 
+    { [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },  // <--
+      [](const ConstantInt* c) { return (c->getValue()-1).logBase2(); },
+      Instruction::Add },
+};
 
-    if(opCode == Instruction::SDiv && const_value2 && const_value2->getValue().isPowerOf2()){
-      first = BinaryOperator::Create(Instruction::AShr, operand1,
-                ConstantInt::get(const_value2->getType(), const_value2->getValue().logBase2()));
+// Returns {first, second} or {nullptr, nullptr} if no reduction applies
+std::pair<Instruction*, Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
+    for (auto& [pred, shift, op] : mulReductions) {
+        if (!pred(c)) continue;
+        auto* shl = BinaryOperator::Create(Instruction::Shl, var,
+                        ConstantInt::get(c->getType(), shift(c)));
+        if (!op) return {shl, nullptr};
+        return {shl, BinaryOperator::Create(*op, shl, var)};
     }
-    else if(opCode == Instruction::Mul){
-      
-      ConstantInt* constantVal = const_value1 ? const_value1 : (const_value2 ? const_value2 : nullptr);
-      if(constantVal == nullptr) continue;
-
-      Value* variableValue = constantVal == const_value1 ? operand2 : operand1;
-
-      for (auto& [pred, build] : mulReductions) {
-        if (!pred(constantVal)) continue;
-        
-        //auto [first, second] = build(variableValue, constantVal);
-        auto newInstructions = build(variableValue, constantVal);
-        first = newInstructions.first;
-        second = newInstructions.second;
-        break;
-      }
-    }
-
-    if(first == nullptr) continue;
-
-    first->insertAfter(&instr);
-    auto* replace = first;
-    if (second) { second->insertAfter(first); replace = second; }
-    instr.replaceAllUsesWith(replace);
-    instr.eraseFromParent();
-    
-  }
-  
-  return true;
+    return {nullptr, nullptr};
 }
+
+bool runOnBasicBlock(BasicBlock &B) override {
+    for (auto it = B.begin(); it != B.end();) {
+        Instruction& instr = *it++;
+
+        if (instr.getNumOperands() != 2) continue;
+
+        Value*      op1 = instr.getOperand(0);
+        Value*      op2 = instr.getOperand(1);
+        auto* cst1 = dyn_cast<ConstantInt>(op1);
+        auto* cst2 = dyn_cast<ConstantInt>(op2);
+
+        Instruction* first  = nullptr;
+        Instruction* second = nullptr;
+
+        switch (instr.getOpcode()) {
+            case Instruction::SDiv:
+                if (cst2 && cst2->getValue().isPowerOf2())
+                    first = BinaryOperator::Create(Instruction::AShr, op1,
+                                ConstantInt::get(cst2->getType(), cst2->getValue().logBase2()));
+                break;
+
+            case Instruction::Mul: {
+                auto* cst = cst1 ? cst1 : cst2;
+                if (!cst) continue;
+                Value* var = cst == cst1 ? op2 : op1;
+                std::tie(first, second) = tryMulReduction(var, cst);
+                break;
+            }
+
+            default: continue;
+        }
+
+        if (!first) continue;
+
+        first->insertAfter(&instr);
+        auto* replace = first;
+        if (second) { second->insertAfter(first); replace = second; }
+        instr.replaceAllUsesWith(replace);
+        instr.eraseFromParent();
+    }
+    return true;
+}
+
+
 
 };
 
