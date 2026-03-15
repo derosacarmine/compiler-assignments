@@ -70,6 +70,8 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 
 ---
 
+### 3. `Multi-Instruction` — Multi-Instruction
+
 ### Shared Structure
 
 Both passes follow the same three-level traversal:
@@ -89,60 +91,87 @@ At the bottom, the two passes are registered as LLVM passes under the names:
 - `strength-reduction`
 
 
-## Refactoring (Da tenere temporaneamente per Manu perchè sennò impazzisce)
+## Code Explanation and Similarities with Java
 
-### AlgebraicIdentity — la mappa
 
 ```cpp
-using Predicate = std::function<bool(const ConstantInt*)>;
+std::function<bool(const ConstantInt*)> predicate;
 ```
-In Java scriveresti:
+In Java:
 ```java
 interface Predicate { boolean test(ConstantInt c); }
 ```
-`using` è un alias di tipo (come `typedef`). `std::function<bool(const ConstantInt*)>` è un tipo che rappresenta **qualsiasi callable** (lambda, funzione, functor) che prende un `const ConstantInt*` e ritorna `bool`. È l'equivalente di `Function<ConstantInt, Boolean>` in Java.
+`using` is a type alias (like `typedef`). `std::function<bool(const ConstantInt*)>` is a type representing **any callable** (lambda, function, functor) that takes a `const ConstantInt*` and returns `bool`. It is the equivalent of `Function<ConstantInt, Boolean>` in Java.
 
 ---
 
+
 ```cpp
-using Identity = std::map<unsigned, Predicate>;
+map<unsigned, function<Value*(ConstantInt*, Value*)constantMap; 
 ```
 Equivalente Java:
 ```java
-Map<Integer, Predicate> identityMap;
+//Integer --> ConstantInt, Object --> Value, Object --> Value (the return type)
+Map<Integer, BiFunction<Integer, Object, Object>> constantMap = new HashMap<>();
+
+// add ad element
+constantMap.put(42, (constInt, value) -> {
+    // logic here
+    return value;
+});
+
+// function recall
+Object result = constantMap.get(42).apply(10, someValue);
 ```
-`std::map` è una mappa ordinata (come `TreeMap` in Java). La chiave è `unsigned` (intero senza segno, non esiste in Java), che qui rappresenta il codice operazione dell'istruzione LLVM.
+The key is `unsigned` which here represents the operation code of the LLVM instruction; the value associated with the key is a fz that returns a Value* and has as parameters (ConstantInt*, Value*) 
+
+---
+In Cpp:
+
+```cpp
+function<Value*(ConstantInt* c, Value* v)> ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
+```
+In Java:
+```Java
+BiFunction<ConstantInt, Value, Value> ifZeroReturnV = (c, v) -> c.isZero() ? v : null;
+```
+In cpp: `lambda [](...) -> returnType {}` in Java(implicit return type): `lambda (...) -> ...`
 
 ---
 
 ```cpp
-Identity identityMap = {
-    {Instruction::Add, [](const ConstantInt* c) { return c->isZero(); }},
-    {Instruction::Mul, [](const ConstantInt* c) { return c->isOne();  }},
-};
+using Fn = function<Value*(ConstantInt*, Value*)>;
+    
+    static Fn firstOf(vector<Fn> fns) {
+        return [fns](ConstantInt* c, Value* v) -> Value* {
+            for (auto& fn : fns)
+                if (auto* r = fn(c, v)) return r;
+            return nullptr;
+        };
+    }
 ```
-In Java:
-```java
-Map<Integer, Predicate> identityMap = Map.of(
-    Instruction.ADD, c -> c.isZero(),
-    Instruction.MUL, c -> c.isOne()
-);
+The [fns] brackets are the lambda's capture list in C++.
+This means that the lambda copies the fns variable (the function vector) from the external context, so it can use it internally. You can choose capture for copy [fns] or for reference [&fns].
+In Java the capture is automatic and implicit so:
+
+```Java
+static BiFunction<ConstantInt, Value, Value> firstOf(List<BiFunction<ConstantInt, Value, Value>> fns) {
+    return (c, v) -> {
+        for (var fn : fns)  {
+            Value r = fn.apply(c, v);
+            if (r != null) return r;
+        }
+        return null;
+    };
+}
 ```
-Le `{}` sono **initializer list**, un modo di inizializzare strutture direttamente inline. `[](const ConstantInt* c) { return c->isZero(); }` è una **lambda**: `[]` è la capture list (ne parliamo dopo), poi ci sono parametri e corpo. `->` in C++ su un puntatore è come `.` in Java — accede a un membro tramite puntatore.
+always capture by reference (but the variable must be effectively final)
 
----
-
-### Il loop
-
+`auto` in C++ is like `var` in Java — the compiler automatically infers the type. Here `auto*` infers that r is of type `Value*` and `auto&` is a reference to the variable, avoids copying to make any changes permanent.
 ```cpp
-for (auto& instr : B) {
+for (auto& fn : fns)  // iterates by reference, does not copy every element
+for (auto fn : fns)   // copy each element of the vector
 ```
-In Java:
-```java
-for (Instruction instr : B) {
-```
-`auto&` significa "deduci il tipo automaticamente, e prendilo per **riferimento**". Il riferimento `&` è importante: senza, copieresti l'istruzione, e le modifiche non avrebbero effetto. In Java gli oggetti sono sempre passati per riferimento implicito, in C++ devi essere esplicito.
-
 ---
 
 ```cpp
@@ -152,7 +181,7 @@ In Java:
 ```java
 var entry = identityMap.get(instr.getOpcode());
 ```
-`find()` ritorna un **iteratore**, non il valore direttamente. Un iteratore in C++ è simile a un cursore/puntatore a una posizione nella mappa.
+`find()` It returns an iterator, not the value itself. An iterator in C++ is similar to a cursor/pointer to a location in the map.
 
 ---
 
@@ -163,52 +192,18 @@ In Java scriveresti:
 ```java
 if (entry == null) continue;
 ```
-`end()` ritorna un iteratore sentinella che indica "non trovato". Non puoi usare `null` perché gli iteratori C++ non sono puntatori nullable — devi confrontare con `end()`.
+`end()` returns a sentinel iterator indicating "not found." You can't use `null` because C++ iterators aren't nullable pointers—you must match with `end()`.
 
 ---
+
 
 ```cpp
-for (int i : {0, 1}) {
+  std::optional<Instruction::BinaryOps> secondOp; // nullopt = only a shift is needed
 ```
-In Java:
-```java
-for (int i : new int[]{0, 1}) {
-```
-Stessa idea, ma in C++ puoi usare direttamente una `initializer_list` inline senza creare un array esplicitamente.
+
+optional in C++ is a value that may or may not be present (presence or absence of a value).
 
 ---
-
-```cpp
-if (auto* c = dyn_cast<ConstantInt>(instr.getOperand(i))) {
-```
-In Java:
-```java
-if (instr.getOperand(i) instanceof ConstantInt c) {
-```
-`dyn_cast<T>` è il cast sicuro di LLVM: se l'operando è un `ConstantInt`, ritorna il puntatore castato, altrimenti `nullptr`. La novità C++ è che puoi dichiarare la variabile `c` **dentro la condizione dell'if** — esiste solo dentro quel blocco.
-
----
-
-```cpp
-if (it->second(c)) {
-```
-`it` è un iteratore a una coppia `{chiave, valore}`. In C++ le coppie hanno `.first` e `.second` invece di `.getKey()` e `.getValue()`. Quindi `it->second` è la `Predicate`, e `(c)` la invoca come se fosse una funzione. In Java:
-```java
-if (entry.getValue().test(c)) {
-```
-
----
-
-```cpp
-instr.replaceAllUsesWith(instr.getOperand(1 - i));
-instr.eraseFromParent();
-break;
-```
-Niente di speciale qui rispetto a Java — sono chiamate a metodi LLVM. `1 - i` è il trucco per ottenere l'altro operando: se `i == 0` prendi `1`, se `i == 1` prendi `0`.
-
----
-
-## StrengthReduction — la capture list nelle lambda
 
 ```cpp
 [](Value* var, ConstantInt* c) -> std::pair<Instruction*, Instruction*> {
@@ -217,46 +212,17 @@ In Java:
 ```java
 BiFunction<Value, ConstantInt, Pair<Instruction, Instruction>> builder = (var, c) -> ...
 ```
-Il `-> std::pair<...>` specifica esplicitamente il tipo di ritorno della lambda (necessario quando è complesso). `std::pair` è come una coppia generica — in Java useresti qualcosa come `Map.Entry` o una record class.
+The `-> std::pair<...>` explicitly specifies the lambda's return type (necessary when it's complex). `std::pair` is like a generic pair—in Java, you'd use something like `Map.Entry` or a record class.
 
-La **capture list** `[]` vuota significa che la lambda **non cattura nulla** dall'esterno. Se avessi scritto `[&]` catturerebbe tutto per riferimento, `[=]` tutto per copia. In Java le lambda catturano automaticamente le variabili `effectively final` — in C++ devi essere esplicito.
+The empty capture list `[]` means the lambda captures nothing from the outside. If I had written `[&]`, it would capture everything by reference, and `[=]` everything by copy. In Java, lambdas automatically capture `effectively final` variables—in C++, you have to be explicit.
 
 ---
 
 ```cpp
-std::vector<std::pair<Predicate, Builder>> mulReductions = { ... };
+std::vector<mulRecduction> mulReductions = { ... };
 ```
 In Java:
 ```java
-List<Map.Entry<Predicate, Builder>> mulReductions = List.of(...);
+List<Map.Entry<mulReduction>> mulReductions = List.of(...);
 ```
-`std::vector` è come `ArrayList`. Si usa un `vector` invece di una `map` perché i casi vanno **controllati in ordine** e sono mutuamente esclusivi — una mappa non garantisce ordine di visita ed avrebbe come chiave una funzione (non hashabile facilmente).
-
----
-
-```cpp
-for (auto& [pred, build] : mulReductions) {
-```
-Questo è **structured binding** (C++17), equivalente a:
-```java
-for (var entry : mulReductions) {
-    var pred  = entry.getKey();
-    var build = entry.getValue();
-```
-Destruttura automaticamente la coppia in due variabili nominative. Molto più leggibile.
-
----
-
-```cpp
-auto [first, second] = build(variable_value, const_value);
-```
-Stesso concetto: destruttura il `std::pair` ritornato da `build` direttamente in due variabili. In Java dovresti fare:
-```java
-var result = build.apply(var, c);
-var first  = result.getKey();
-var second = result.getValue();
-```
-
----
-
-Le differenze principali da tenere a mente rispetto a Java sono: i **riferimenti** (`&`) che devi gestire esplicitamente, gli **iteratori** al posto dei nullable, le **lambda con capture list** esplicita, e gli **structured bindings** per destrutturare coppie/tuple.
+`std::vector` is like `ArrayList`. A `vector` is used instead of a `map` because the cases must be **checked in order** and are mutually exclusive—a map does not guarantee order of visit and would have a function as its key (not easily hashable).
