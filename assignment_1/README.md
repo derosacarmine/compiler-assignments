@@ -72,6 +72,9 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 
 ### 3. `Multi-Instruction` — Multi-Instruction
 
+
+---
+
 ### Shared Structure
 
 Both passes follow the same three-level traversal:
@@ -105,11 +108,12 @@ interface Predicate { boolean test(ConstantInt c); }
 
 ---
 
+In cpp:
 
 ```cpp
 map<unsigned, function<Value*(ConstantInt*, Value*)constantMap; 
 ```
-Equivalente Java:
+In Java:
 ```java
 //Integer --> ConstantInt, Object --> Value, Object --> Value (the return type)
 Map<Integer, BiFunction<Integer, Object, Object>> constantMap = new HashMap<>();
