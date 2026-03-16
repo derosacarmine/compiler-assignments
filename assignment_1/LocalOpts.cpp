@@ -178,37 +178,60 @@ struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 struct mulReduction{
   function<bool(const ConstantInt*)> predicate;
   function<unsigned(const ConstantInt*)> shiftAmount;
-  std::optional<Instruction::BinaryOps> secondOp; // nullopt = only a shift is needed
+  std::vector<Instruction::BinaryOps> ops;
 };
 
 
 const vector<mulReduction> mulReductions = {
     { [](const ConstantInt* c) { return c->getValue().isPowerOf2(); },
       [](const ConstantInt* c) { return c->getValue().logBase2(); },
-      std::nullopt },
+      {} },
 
     { [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },
       [](const ConstantInt* c) { return (c->getValue()+1).logBase2(); },
-      Instruction::Sub },
+      { Instruction::Sub } },
 
     { [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },
       [](const ConstantInt* c) { return (c->getValue()-1).logBase2(); },
-      Instruction::Add },
+      { Instruction::Add } },
+    
+    { [](const ConstantInt* c) { return (c->getValue()+2).isPowerOf2(); },
+      [](const ConstantInt* c) { return (c->getValue()+2).logBase2(); },
+      { Instruction::Sub, Instruction::Sub } },
+
+    { [](const ConstantInt* c) { return (c->getValue()-2).isPowerOf2(); },
+      [](const ConstantInt* c) { return (c->getValue()-2).logBase2(); },
+      { Instruction::Add, Instruction::Add } },
 };
 
 // Returns {first, second} or {nullptr, nullptr} if no reduction applies
-std::pair<Instruction*, Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
-    for (auto& [pred, shift, op] : mulReductions) {  // pred -> condition to verify, shift -> shift value for a constant (if pred is true), op -> second operation, if needed
+std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
+    for (auto& [pred, shift, ops] : mulReductions) {  // pred -> condition to verify, shift -> shift value for a constant (if pred is true), op -> second operation, if needed
         if (!pred(c)) continue;
+
+        std::vector<Instruction*> results;
+
         auto* shl = BinaryOperator::Create(Instruction::Shl, var,
                         ConstantInt::get(c->getType(), shift(c)));
-        if (!op) return {shl, nullptr};
-        return {shl, BinaryOperator::Create(*op, shl, var)};
+        results.push_back(shl);
+        Value* lastValue = shl;
+
+        for(auto opCode : ops) {
+          auto* next = BinaryOperator::Create(opCode, lastValue, var);
+          results.push_back(next);
+          lastValue = next;
+        }
+        return results;
+
+        //if (!op1) return {shl, nullptr, nullptr};
+        //else if(!op2) return {shl, BinaryOperator::Create(*op1, shl, var), nullptr};
+        //else return {shl, BinaryOperator::Create(*op1, shl, var), BinaryOperator::Create(*op2, shl, var)}
     }
-    return {nullptr, nullptr};
+    return {};
 }
 
 bool runOnBasicBlock(BasicBlock &B) override {
+    bool Transformed = false;
     for (auto it = B.begin(); it != B.end();) {
         Instruction& instr = *it++;
 
@@ -219,36 +242,42 @@ bool runOnBasicBlock(BasicBlock &B) override {
         auto* cst1 = dyn_cast<ConstantInt>(op1);
         auto* cst2 = dyn_cast<ConstantInt>(op2);
 
-        Instruction* first  = nullptr;
-        Instruction* second = nullptr;
+        std::vector<Instruction*> newInsts;
 
         switch (instr.getOpcode()) {
             case Instruction::SDiv:
-                if (cst2 && cst2->getValue().isPowerOf2())
-                    first = BinaryOperator::Create(Instruction::AShr, op1,
+                if (cst2 && cst2->getValue().isPowerOf2()){
+                    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1,
                                 ConstantInt::get(cst2->getType(), cst2->getValue().logBase2()));
+                    newInsts.push_back(ashr);
+                }
                 break;
 
             case Instruction::Mul: {
                 auto* cst = cst1 ? cst1 : cst2;
                 if (!cst) continue;
                 Value* var = cst == cst1 ? op2 : op1;
-                std::tie(first, second) = tryMulReduction(var, cst); // tie unpacks an std::pair
+                newInsts = tryMulReduction(var, cst);
                 break;
             }
 
             default: continue;
         }
 
-        if (!first) continue;
+        if (newInsts.empty()) continue;
 
-        first->insertAfter(&instr);
-        auto* replace = first;
-        if (second) { second->insertAfter(first); replace = second; }
-        instr.replaceAllUsesWith(replace);
+        Instruction* replace = &instr;
+        for(auto* newInst : newInsts) {
+          newInst->insertAfter(replace);
+          replace = newInst;
+        }
+        
+        instr.replaceAllUsesWith(newInsts.back());
         instr.eraseFromParent();
+
+        Transformed = true;
     }
-    return true;
+    return Transformed;
 }
 
 
