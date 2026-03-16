@@ -192,7 +192,7 @@ var entry = identityMap.get(instr.getOpcode());
 ```cpp
 if (it == identityMap.end()) continue;
 ```
-In Java scriveresti:
+In Java:
 ```java
 if (entry == null) continue;
 ```

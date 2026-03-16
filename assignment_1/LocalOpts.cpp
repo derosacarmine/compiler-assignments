@@ -204,9 +204,10 @@ const vector<mulReduction> mulReductions = {
       { Instruction::Add, Instruction::Add } },
 };
 
-// Returns {first, second} or {nullptr, nullptr} if no reduction applies
+// Returns a vector of operations, or {} if no reduction applies
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
-    for (auto& [pred, shift, ops] : mulReductions) {  // pred -> condition to verify, shift -> shift value for a constant (if pred is true), op -> second operation, if needed
+    // pred -> condition to verify, shift -> shift value for a constant (if pred is true), ops -> extra operations, if needed
+    for (auto& [pred, shift, ops] : mulReductions) {
         if (!pred(c)) continue;
 
         std::vector<Instruction*> results;
@@ -222,11 +223,52 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
           lastValue = next;
         }
         return results;
-
-        //if (!op1) return {shl, nullptr, nullptr};
-        //else if(!op2) return {shl, BinaryOperator::Create(*op1, shl, var), nullptr};
-        //else return {shl, BinaryOperator::Create(*op1, shl, var), BinaryOperator::Create(*op2, shl, var)}
     }
+
+    //check if we can use two shifts
+    const APInt& val = c->getValue();
+    unsigned width = val.getBitWidth();
+
+    uint64_t z = val.getZExtValue();
+    //floor
+    unsigned logLow = val.logBase2();
+    //ceiling
+    unsigned logHigh = logLow + 1;
+
+    uint64_t pLow = 1ULL << logLow;
+    uint64_t pHigh = 1ULL << logHigh;
+
+    //difference from floor value
+    uint64_t distLow = z - pLow;
+    //difference from ceiling value
+    uint64_t distHigh = pHigh - z;
+
+    unsigned mainLog = 0;
+    unsigned distLog = 0;
+    Instruction::BinaryOps finalOp;
+    bool found = false;
+
+    if (isPowerOf2_64(distLow)) {
+        mainLog = logLow;
+        distLog = APInt(width, distLow).logBase2();
+        finalOp = Instruction::Add;
+        found = true;
+    } else if (isPowerOf2_64(distHigh)) {
+        mainLog = logHigh;
+        distLog = APInt(width, distHigh).logBase2();
+        finalOp = Instruction::Sub;
+        found = true;
+    }
+
+    if (found) {
+        auto* type = c->getType();
+        auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
+        auto* shl2 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, distLog));
+        auto* finalRes = BinaryOperator::Create(finalOp, shl1, shl2);
+        
+        return {shl1, shl2, finalRes};
+    }
+
     return {};
 }
 
