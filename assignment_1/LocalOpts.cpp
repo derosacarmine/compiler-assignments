@@ -175,101 +175,86 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
-struct mulReduction{
-  function<bool(const ConstantInt*)> predicate;
-  function<unsigned(const ConstantInt*)> shiftAmount;
-  std::vector<Instruction::BinaryOps> ops;
-};
-
-
-const vector<mulReduction> mulReductions = {
-    { [](const ConstantInt* c) { return c->getValue().isPowerOf2(); },
-      [](const ConstantInt* c) { return c->getValue().logBase2(); },
-      {} },
-
-    { [](const ConstantInt* c) { return (c->getValue()+1).isPowerOf2(); },
-      [](const ConstantInt* c) { return (c->getValue()+1).logBase2(); },
-      { Instruction::Sub } },
-
-    { [](const ConstantInt* c) { return (c->getValue()-1).isPowerOf2(); },
-      [](const ConstantInt* c) { return (c->getValue()-1).logBase2(); },
-      { Instruction::Add } },
-    
-    { [](const ConstantInt* c) { return (c->getValue()+2).isPowerOf2(); },
-      [](const ConstantInt* c) { return (c->getValue()+2).logBase2(); },
-      { Instruction::Sub, Instruction::Sub } },
-
-    { [](const ConstantInt* c) { return (c->getValue()-2).isPowerOf2(); },
-      [](const ConstantInt* c) { return (c->getValue()-2).logBase2(); },
-      { Instruction::Add, Instruction::Add } },
-};
-
 // Returns a vector of operations, or {} if no reduction applies
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
-    // pred -> condition to verify, shift -> shift value for a constant (if pred is true), ops -> extra operations, if needed
-    for (auto& [pred, shift, ops] : mulReductions) {
-        if (!pred(c)) continue;
+    const APInt& originalVal = c->getValue();
+    bool isNegative = originalVal.isNegative();
+    
+    APInt absVal = originalVal.abs();
+    uint64_t z = absVal.getZExtValue();
+    auto* type = c->getType();
 
-        std::vector<Instruction*> results;
+    std::vector<Instruction*> results = {};
+    Value* finalValue = nullptr;
 
-        auto* shl = BinaryOperator::Create(Instruction::Shl, var,
-                        ConstantInt::get(c->getType(), shift(c)));
+    //case 1: multiply by 1 (if original value is -1)
+    if (absVal.isOne() && isNegative) {
+        finalValue = var;
+    }
+
+    //case 2: power of 2
+    else if (absVal.isPowerOf2()) {
+        unsigned shift = absVal.logBase2();
+        Instruction* shl = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, shift));
         results.push_back(shl);
-        Value* lastValue = shl;
-
-        for(auto opCode : ops) {
-          auto* next = BinaryOperator::Create(opCode, lastValue, var);
-          results.push_back(next);
-          lastValue = next;
-        }
-        return results;
+        finalValue = shl;
     }
 
-    //check if we can use two shifts
-    const APInt& val = c->getValue();
-    unsigned width = val.getBitWidth();
+    //case 3: not a power of 2
+    else{
+      unsigned logLow = absVal.logBase2();
+      unsigned logHigh = logLow + 1;
+      uint64_t pLow = 1ULL << logLow;
+      uint64_t pHigh = 1ULL << logHigh;
 
-    uint64_t z = val.getZExtValue();
-    //floor
-    unsigned logLow = val.logBase2();
-    //ceiling
-    unsigned logHigh = logLow + 1;
+      uint64_t distLow = z - pLow;
+      uint64_t distHigh = pHigh - z;
 
-    uint64_t pLow = 1ULL << logLow;
-    uint64_t pHigh = 1ULL << logHigh;
+      unsigned mainLog = 0, distLog = 0;
+      Instruction::BinaryOps finalOp;
+      bool found = false;
 
-    //difference from floor value
-    uint64_t distLow = z - pLow;
-    //difference from ceiling value
-    uint64_t distHigh = pHigh - z;
+      //checks if the distance is a power of 2, this includes 1 = 2^0
+      if (isPowerOf2_64(distLow)) {
+          mainLog = logLow;
+          distLog = APInt(64, distLow).logBase2();
+          finalOp = Instruction::Add;
+          found = true;
+      } 
+      else if (isPowerOf2_64(distHigh)) {
+          mainLog = logHigh;
+          distLog = APInt(64, distHigh).logBase2();
+          finalOp = Instruction::Sub;
+          found = true;
+      }
 
-    unsigned mainLog = 0;
-    unsigned distLog = 0;
-    Instruction::BinaryOps finalOp;
-    bool found = false;
+      if (found) {
+          auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
+          
+          //if distLog == 0, use var, else it will chance in the next if
+          Value* secondOperand = var;
+          results.push_back(shl1);
 
-    if (isPowerOf2_64(distLow)) {
-        mainLog = logLow;
-        distLog = APInt(width, distLow).logBase2();
-        finalOp = Instruction::Add;
-        found = true;
-    } else if (isPowerOf2_64(distHigh)) {
-        mainLog = logHigh;
-        distLog = APInt(width, distHigh).logBase2();
-        finalOp = Instruction::Sub;
-        found = true;
+          if (distLog > 0) {
+              auto* shl2 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, distLog));
+              results.push_back(shl2);
+              secondOperand = shl2;
+          }
+
+          auto* finalRes = BinaryOperator::Create(finalOp, shl1, secondOperand);
+          results.push_back(finalRes);
+          finalValue = finalRes;
+      }
     }
 
-    if (found) {
-        auto* type = c->getType();
-        auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
-        auto* shl2 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, distLog));
-        auto* finalRes = BinaryOperator::Create(finalOp, shl1, shl2);
-        
-        return {shl1, shl2, finalRes};
+    //checks if we multiplied by a negative value, if so: 0 - the result
+    if (isNegative && finalValue) {
+      Value* zero = ConstantInt::get(type, 0);
+      Instruction* neg = BinaryOperator::Create(Instruction::Sub, zero, finalValue);
+      results.push_back(neg);
     }
 
-    return {};
+    return results;
 }
 
 bool runOnBasicBlock(BasicBlock &B) override {

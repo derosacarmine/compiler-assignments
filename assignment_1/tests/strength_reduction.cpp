@@ -7,5 +7,8 @@ int fun (int a, int b)
     int g = (a+b) / 4;
     int x = a * 40;
     int y = b * 56;
+    int w = a * -1;
+    int v = b * -4;
+    int z = a * -10;
     return g * 15;
 }
