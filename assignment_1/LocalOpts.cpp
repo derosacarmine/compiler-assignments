@@ -123,8 +123,9 @@ If they're constant, it checks whether it's zero (in the case of adding) or
 with the variable operand.
  */
 bool runOnBasicBlock(BasicBlock &B) override {
-  
+  bool transformed = false;
   for (auto instr_it = B.begin(); instr_it != B.end();) {
+    bool trans
     Instruction& instr = *instr_it;
     instr_it++;
   
@@ -137,6 +138,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
     auto varIt = variablesMap.find(opCode);
     if (varIt != variablesMap.end()) {
       if(auto replacement = varIt->second(op1, op2)){
+        transformed = true;
         instr.replaceAllUsesWith(replacement);
         instr.eraseFromParent();
         continue;
@@ -159,6 +161,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
         Value* variable = op1 == operand ? op2 : op1;
         if (ConstantInt* constant = dyn_cast<ConstantInt>(operand)) {
             if (auto replacement = constIt->second(constant, variable)) {
+                transformed = true;
                 instr.replaceAllUsesWith(replacement);
                 instr.eraseFromParent();
                 break;
@@ -167,7 +170,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
       }  
   }
   
-  return true;
+  return transformed;
 }
 
 };
@@ -187,12 +190,13 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     std::vector<Instruction*> results = {};
     Value* finalValue = nullptr;
 
-    //case 1: multiply by 1 (if original value is -1)
+    //case 1: multiply by 1 (if original value is -1), do nothing and subtract from 0 at the end
+    //TODO: check if we can remove this if and if it's ok to have the extra shift (with 0) added be removed by the identities
     if (absVal.isOne() && isNegative) {
         finalValue = var;
     }
 
-    //case 2: power of 2
+    //case 2: power of 2, just a shift
     else if (absVal.isPowerOf2()) {
         unsigned shift = absVal.logBase2();
         Instruction* shl = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, shift));
@@ -201,6 +205,10 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     }
 
     //case 3: not a power of 2
+    //identify the surrounding powers of 2: 2^logLow <= constant <= 2^logHigh
+    //compute the offset from both boundaries: distLow and distHigh
+    //if either of these is a power of 2 the mul can be reduced to an add/sub between two shifts
+    //unless the distLog results 0 (1 = 2^0), in which case the offset to the nearest power of 2 is only 1 and thus only a shift and ad add/sub is needed
     else{
       unsigned logLow = absVal.logBase2();
       unsigned logHigh = logLow + 1;
@@ -214,7 +222,6 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
       Instruction::BinaryOps finalOp;
       bool found = false;
 
-      //checks if the distance is a power of 2, this includes 1 = 2^0
       if (isPowerOf2_64(distLow)) {
           mainLog = logLow;
           distLog = APInt(64, distLow).logBase2();
@@ -231,10 +238,11 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
       if (found) {
           auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
           
-          //if distLog == 0, use var, else it will chance in the next if
+          //if distLog == 0, use var for the second operation (add/sub)
           Value* secondOperand = var;
           results.push_back(shl1);
 
+          //if distLog is greater than 0 then we need a second shift before the add/sub 
           if (distLog > 0) {
               auto* shl2 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, distLog));
               results.push_back(shl2);
@@ -258,20 +266,24 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
 }
 
 bool runOnBasicBlock(BasicBlock &B) override {
-    bool Transformed = false;
+    //checks if we applied any optimizations
+    bool transformed = false;
     for (auto it = B.begin(); it != B.end();) {
         Instruction& instr = *it++;
 
+        //ignore instructions without 2 operands
         if (instr.getNumOperands() != 2) continue;
 
-        Value*      op1 = instr.getOperand(0);
-        Value*      op2 = instr.getOperand(1);
+        Value* op1 = instr.getOperand(0);
+        Value* op2 = instr.getOperand(1);
         auto* cst1 = dyn_cast<ConstantInt>(op1);
         auto* cst2 = dyn_cast<ConstantInt>(op2);
 
+        //vector that takes the new instructions to replace the muls/divs
         std::vector<Instruction*> newInsts;
 
         switch (instr.getOpcode()) {
+            //if it's a div, do a shift right
             case Instruction::SDiv:
                 if (cst2 && cst2->getValue().isPowerOf2()){
                     Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1,
@@ -280,6 +292,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 }
                 break;
 
+            //if it's a mul, checks which value is the constant and call tryMulReduction to optimize the instruction
             case Instruction::Mul: {
                 auto* cst = cst1 ? cst1 : cst2;
                 if (!cst) continue;
@@ -293,18 +306,20 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
         if (newInsts.empty()) continue;
 
+        //if there are new instructions, insert them after the old ones
         Instruction* replace = &instr;
         for(auto* newInst : newInsts) {
           newInst->insertAfter(replace);
           replace = newInst;
         }
         
+        //replace all instances of the result of the old instructions with the new one and then delete the old one from the code
         instr.replaceAllUsesWith(newInsts.back());
         instr.eraseFromParent();
 
-        Transformed = true;
+        transformed = true;
     }
-    return Transformed;
+    return transformed;
 }
 
 
