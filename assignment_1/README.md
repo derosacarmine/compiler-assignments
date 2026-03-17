@@ -22,7 +22,7 @@ In these cases, if a constant operand has a specific value (such as 0 or 1), an 
     
 *   **Zero subtraction:** `x - 0 = x`.
 
-*   **Multiplication by 0:** `x * 0 = 0` o `0 * x = 0`.
+*   **Multiplication by 0:** `x * 0 = 0`, `0 * x = 0`.
     
 *   **Multiplication by 1:** `x * 1 = x`, `1 * x = x`.
     
@@ -55,7 +55,7 @@ In these cases, an instruction can be replaced if the two operands are the same.
 
 ### 2. `StrengthReduction` — Strength Reduction
 
-Replaces **expensive** operations (multiplications and divisions) with **cheaper** ones (bitwise shifts):
+Replaces **expensive** operations (multiplications and divisions) with **cheaper** ones:
 
 **Multiplication (`Mul`):**
 | Case | Example | Replacement |
@@ -63,6 +63,9 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 | Power of 2 | `x * 8` | `x << 3` |
 | Power of 2 − 1 | `x * 7` | `(x << 3) - x` |
 | Power of 2 + 1 | `x * 9` | `(x << 3) + x` |
+| Multiplication by -1 | `x * (-1)` | `0 - x` |
+| Sum of 2 powers | `x * 40` | `(x << 5) + (x << 3)` |
+| Sub of 2 powers | `x * 56` | `(x << 6) - (x << 3)` | 
 
 **Integer Division (`SDiv`):**
 - If the divisor is a power of 2 → arithmetic right shift (`AShr`)
