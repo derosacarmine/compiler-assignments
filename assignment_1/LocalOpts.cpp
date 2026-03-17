@@ -125,7 +125,6 @@ with the variable operand.
 bool runOnBasicBlock(BasicBlock &B) override {
   bool transformed = false;
   for (auto instr_it = B.begin(); instr_it != B.end();) {
-    bool trans
     Instruction& instr = *instr_it;
     instr_it++;
   
@@ -327,9 +326,56 @@ bool runOnBasicBlock(BasicBlock &B) override {
 };
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
-    bool runOnBasicBlock(BasicBlock &B) override {
-      return false;
+    
+  /*Es: b = a +1 --> var = a e Constant = 1 
+    b           →  (var=b, constant=0)
+    a = b + 1   →  (var=b, constant=+1)
+    c = a - 1   →  (var=b, constant=0)  -> constant=0 significa c == b !
+    d = a + 1   →  (var=b, constant=+2)
+    By recursively working your way up the chain, you accumulate the total constant. 
+    If the constant is ultimately 0, it means the current statement is equivalent to var, and you can use 
+    replaceAllUsesWith(var).
+  */
+std::pair<Value*, int64_t> getVarAndConstant(Value* v) {
+    auto* instr = dyn_cast<Instruction>(v);
+    if (!instr) return {v, 0};
+
+    if (instr->getOpcode() == Instruction::Add) {
+        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
+            auto [var, constant] = getVarAndConstant(instr->getOperand(0));
+            return {var, constant + cst->getSExtValue()};
+        }
+        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(0))) {
+            auto [var, constant] = getVarAndConstant(instr->getOperand(1));
+            return {var, constant + cst->getSExtValue()};
+        }
     }
+    if (instr->getOpcode() == Instruction::Sub) {
+        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
+            auto [var, constant] = getVarAndConstant(instr->getOperand(0));
+            return {var, constant - cst->getSExtValue()};
+        }
+    }
+
+    return {v, 0};
+}
+
+bool runOnBasicBlock(BasicBlock &B) override {
+    bool changed = false;
+    for (auto it = B.begin(); it != B.end();) {
+        Instruction& instr = *it++;
+
+        if (instr.getOpcode() != Instruction::Add &&
+            instr.getOpcode() != Instruction::Sub) continue;
+
+        auto [var, constant] = getVarAndConstant(&instr);
+        if (constant == 0 && var != &instr) {
+            instr.replaceAllUsesWith(var);
+            changed = true;
+        }
+    }
+    return changed;
+}
 };
 
 

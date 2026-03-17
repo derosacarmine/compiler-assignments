@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ALLOWED_PASSES=("algebraic-identity" "strength-reduction")
+ALLOWED_PASSES=("algebraic-identity" "strength-reduction" "multi-instruction")
 
 usage() {
     echo "usage: $0 -t <test_dir> -p <plugin_path> <pass1> <pass2> ..."
