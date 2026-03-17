@@ -74,8 +74,12 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 ---
 
 ### 3. `Multi-Instruction` — Multi-Instruction
+multi-instruction optimization is the process of examining short sequences of instructions and replacing them with a single, more efficient instruction or a better-performing sequence.
 
-
+- `a = b+1, c = a-1 --> c = b`
+- `b*1 ,  1*b --> b`
+- `b << 0, b >> 0, b | 0, b ^ 0--> b`
+- `(b & -1 → b)`
 ---
 
 ### Shared Structure
