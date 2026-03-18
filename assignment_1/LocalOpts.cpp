@@ -5,6 +5,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cstddef>
 #include <cstdint>
+#include <llvm-19/llvm/IR/Analysis.h>
 #include <llvm-19/llvm/IR/Constant.h>
 #include <llvm-19/llvm/IR/Constants.h>
 #include <llvm-19/llvm/IR/InstrTypes.h>
@@ -14,11 +15,11 @@
 #include <llvm-19/llvm/Support/Casting.h>
 #include <functional>
 #include <map>
+#include <set>
 #include <vector>
 #include <utility>
 
 using namespace llvm;
-using namespace std;
 
 namespace {
 
@@ -30,11 +31,11 @@ struct Common {
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
+        if(runOnFunction(F))
+            return  PreservedAnalyses::none();
 
-  	runOnFunction(F);
-
-  	return PreservedAnalyses::all();
-}
+        return PreservedAnalyses::all();
+    }
 
   /*
   for each basic block of the fz it calls runOnBasickBlock
@@ -63,22 +64,22 @@ struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
 
 //for constantMap
-function<Value*(ConstantInt* c, Value* v)> ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
-function<Value*(ConstantInt* c, Value* v)> ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
-function<Value*(ConstantInt* c, Value* v)> ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
-function<Value*(ConstantInt* c, Value* v)> ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
-function<Value*(ConstantInt* c, Value* v)> ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
+std::function<Value*(ConstantInt* c, Value* v)> ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
+std::function<Value*(ConstantInt* c, Value* v)> ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
+std::function<Value*(ConstantInt* c, Value* v)> ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+std::function<Value*(ConstantInt* c, Value* v)> ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
+std::function<Value*(ConstantInt* c, Value* v)> ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
 
 //for variableMap
-function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
-function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
-function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
+std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
+std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
+std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
 
 
 /*Returns a function that takes the list of functions and tries them in order.*/
-using Fn = function<Value*(ConstantInt*, Value*)>;
+using Fn = std::function<Value*(ConstantInt*, Value*)>;
     
-    static Fn firstOf(vector<Fn> fns) {
+    static Fn firstOf(std::vector<Fn> fns) {
         return [fns](ConstantInt* c, Value* v) -> Value* {
             for (auto& fn : fns)
                 if (auto* r = fn(c, v)) return r;
@@ -87,7 +88,7 @@ using Fn = function<Value*(ConstantInt*, Value*)>;
     }
   
 // map used to simplify identities which have a constant
-map<unsigned, function<Value*(ConstantInt*, Value*)>> constantMap = {
+std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::Add, ifZeroReturnV},
     {Instruction::Sub, ifZeroReturnV},
     {Instruction::AShr, ifZeroReturnV}, // Arithmetic right shifts fills with 1s if the number is negative or 0s if positive
@@ -105,7 +106,7 @@ map<unsigned, function<Value*(ConstantInt*, Value*)>> constantMap = {
 };
 
 // map used to simplify identities which have two identical operands
-map<unsigned, function<Value*(Value*, Value*)>> variablesMap = {
+std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::Sub, ifOpsEqualReturnZero},
     {Instruction::SDiv, ifOpsEqualReturnOne},
     {Instruction::And, ifOpsEqualReturnOp1},
@@ -115,6 +116,7 @@ map<unsigned, function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::SRem, ifOpsEqualReturnZero},
 };
 
+std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
 /*
 It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
@@ -148,13 +150,11 @@ bool runOnBasicBlock(BasicBlock &B) override {
     auto constIt = constantMap.find(opCode);
     if (constIt == constantMap.end()) continue;
 
-    vector<Value*> usableConstants;
+    std::vector<Value*> usableConstants;
 
-    if(opCode == Instruction::Add || opCode == Instruction::Mul || opCode == Instruction::Or || opCode == Instruction::And || 
-                opCode == Instruction::Xor)
+    if(commutativeOps.count(opCode) > 0)
       usableConstants = {op1,op2};
-    else if (opCode == Instruction::Sub || opCode == Instruction::SDiv || opCode == Instruction::AShr || opCode == Instruction::LShr ||
-                opCode == Instruction::Shl || opCode == Instruction::URem || opCode == Instruction::SRem)
+    else
       usableConstants = {op2};
 
     for (Value* operand : usableConstants) {
@@ -348,7 +348,7 @@ std::pair<Value*, int64_t> getVarAndConstantShl(Value* v) {
 
 
 
-    std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
+std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
     auto* instr = dyn_cast<Instruction>(v);
     if (!instr) return {v, 1};
 
@@ -403,34 +403,38 @@ bool runOnBasicBlock(BasicBlock &B) override {
         Instruction& instr = *it++;
 
         if (instr.getOpcode() == Instruction::Add ||
-            instr.getOpcode() == Instruction::Sub) {
-                auto [var, constant] = getVarAndConstantAddSub(&instr);
-                if (constant == 0 && var != &instr) {
-                    instr.replaceAllUsesWith(var);
-                    changed = true;
-                }
+            instr.getOpcode() == Instruction::Sub) 
+        {
+            auto [var, constant] = getVarAndConstantAddSub(&instr);
+            if (constant == 0 && var != &instr) {
+                instr.replaceAllUsesWith(var);
+                changed = true;
             }
-            else if (instr.getOpcode() == Instruction::Mul){
-                auto [var, constant] = getVarAndConstantMul(&instr);
-                if (constant == 1 && var != &instr) {
+        }
+        else if (instr.getOpcode() == Instruction::Mul){
+            auto [var, constant] = getVarAndConstantMul(&instr);
+            if (constant == 1 && var != &instr) {
                     instr.replaceAllUsesWith(var);
                     changed = true;
-                }
-            } else if(instr.getOpcode() == Instruction::Shl || instr.getOpcode() == Instruction::Or ||
+            }
+        } 
+        else if(instr.getOpcode() == Instruction::Shl || instr.getOpcode() == Instruction::Or ||
                     instr.getOpcode() == Instruction::Xor  || instr.getOpcode() == Instruction::AShr 
-                    || instr.getOpcode() == Instruction::LShr){
-                auto [var, constant] = getVarAndConstantShl(&instr);
-                if (constant == 0 && var != &instr) {
-                    instr.replaceAllUsesWith(var);
-                    changed = true;
-                }
-            }else if(instr.getOpcode() == Instruction::And){
+                    || instr.getOpcode() == Instruction::LShr)
+        {
+            auto [var, constant] = getVarAndConstantShl(&instr);
+            if (constant == 0 && var != &instr) {
+                instr.replaceAllUsesWith(var);
+                changed = true;
+            }
+        }
+        else if(instr.getOpcode() == Instruction::And){
                 auto [var, constant] = getVarAndConstantShl(&instr);
                 if (constant == -1 && var != &instr) {
                     instr.replaceAllUsesWith(var);
                     changed = true;
                 }
-            }
+        }
             
         
     }
