@@ -329,7 +329,43 @@ bool runOnBasicBlock(BasicBlock &B) override {
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
 
-std::pair<Value*, int64_t> getVarAndConstantShl(Value* v) {
+    struct OpHandler {
+        std::function<std::pair<Value*, int64_t>(Value*)> getVarAndConstant;    //recursive function
+        int64_t neutralConstant;
+        std::optional<std::function<Value*(Instruction&)>> zeroHandler; //for Mul and Div
+
+        //constructor
+        OpHandler(
+            std::function<std::pair<Value*, int64_t>(Value*)> fn,
+            int64_t neutral,
+            std::optional<std::function<Value*(Instruction&)>> zh = std::nullopt
+        ) : getVarAndConstant(fn), neutralConstant(neutral), zeroHandler(zh) {}
+    };
+
+
+    static Value* mulZero(Instruction& i) {
+        auto* c0 = dyn_cast<ConstantInt>(i.getOperand(0));
+        auto* c1 = dyn_cast<ConstantInt>(i.getOperand(1));
+        if (c0 && c0->isZero()) return c0;
+        if (c1 && c1->isZero()) return c1;
+        return nullptr; 
+    }
+
+    static Value* divZero(Instruction& i) {
+        auto* c0 = dyn_cast<ConstantInt>(i.getOperand(0));
+        return (c0 && c0->isZero()) ? c0 : nullptr;
+    }
+
+ 
+
+
+/*
+    By recursively working your way up the chain, you accumulate the total constant. 
+    If the constant is ultimately 0, it means the current statement is equivalent to var, and you can use 
+    replaceAllUsesWith(var).
+  */
+
+static std::pair<Value*, int64_t> getVarAndConstantShl(Value* v) {
     auto* instr = dyn_cast<Instruction>(v);
     if (!instr) return {v, 1};
 
@@ -346,9 +382,27 @@ std::pair<Value*, int64_t> getVarAndConstantShl(Value* v) {
     return {v, 1};
 }
 
+static std::pair<Value*, int64_t> getVarAndConstantDiv(Value* v) {
+    auto* instr = dyn_cast<Instruction>(v);
+    if (!instr) return {v, 1};
+
+    if(instr->getOpcode() == Instruction::UDiv){
+        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
+            auto [var, constant] = getVarAndConstantMul(instr->getOperand(0));
+            return {var, constant * cst->getSExtValue()};
+        }
+        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(0))) {
+            auto [var, constant] = getVarAndConstantMul(instr->getOperand(1));
+            return {var, constant * cst->getSExtValue()};
+        }
+    }
 
 
-std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
+    return {v, 1};
+}
+
+
+static std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
     auto* instr = dyn_cast<Instruction>(v);
     if (!instr) return {v, 1};
 
@@ -367,12 +421,8 @@ std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
     return {v, 1};
 }
     
-  /*
-    By recursively working your way up the chain, you accumulate the total constant. 
-    If the constant is ultimately 0, it means the current statement is equivalent to var, and you can use 
-    replaceAllUsesWith(var).
-  */
-std::pair<Value*, int64_t> getVarAndConstantAddSub(Value* v) {
+
+static std::pair<Value*, int64_t> getVarAndConstantAddSub(Value* v) {
     auto* instr = dyn_cast<Instruction>(v);
     if (!instr) return {v, 0};
 
@@ -397,46 +447,46 @@ std::pair<Value*, int64_t> getVarAndConstantAddSub(Value* v) {
     return {v, 0};
 }
 
+
+
+
+std::map<unsigned, OpHandler> handlers = {
+    {Instruction::Add,  {getVarAndConstantAddSub, 0}},
+    {Instruction::Sub,  {getVarAndConstantAddSub, 0}},
+    {Instruction::Mul,  {getVarAndConstantMul,    1, mulZero}},
+    {Instruction::UDiv, {getVarAndConstantDiv,    1, divZero}},
+    {Instruction::Shl,  {getVarAndConstantShl,    0}},
+    {Instruction::Or,   {getVarAndConstantShl,    0}},
+    {Instruction::Xor,  {getVarAndConstantShl,    0}},
+    {Instruction::AShr, {getVarAndConstantShl,    0}},
+    {Instruction::LShr, {getVarAndConstantShl,    0}},
+    {Instruction::And,  {getVarAndConstantShl,   -1}},
+};
+
+
 bool runOnBasicBlock(BasicBlock &B) override {
     bool changed = false;
     for (auto it = B.begin(); it != B.end();) {
         Instruction& instr = *it++;
 
-        if (instr.getOpcode() == Instruction::Add ||
-            instr.getOpcode() == Instruction::Sub) 
-        {
-            auto [var, constant] = getVarAndConstantAddSub(&instr);
-            if (constant == 0 && var != &instr) {
-                instr.replaceAllUsesWith(var);
+        auto it2 = handlers.find(instr.getOpcode());
+        if (it2 == handlers.end()) continue;
+
+        const OpHandler& h = it2->second;
+
+        if (h.zeroHandler) {
+            if (Value* zero = (*h.zeroHandler)(instr)) {
+                instr.replaceAllUsesWith(zero);
                 changed = true;
+                continue;
             }
         }
-        else if (instr.getOpcode() == Instruction::Mul){
-            auto [var, constant] = getVarAndConstantMul(&instr);
-            if (constant == 1 && var != &instr) {
-                    instr.replaceAllUsesWith(var);
-                    changed = true;
-            }
-        } 
-        else if(instr.getOpcode() == Instruction::Shl || instr.getOpcode() == Instruction::Or ||
-                    instr.getOpcode() == Instruction::Xor  || instr.getOpcode() == Instruction::AShr 
-                    || instr.getOpcode() == Instruction::LShr)
-        {
-            auto [var, constant] = getVarAndConstantShl(&instr);
-            if (constant == 0 && var != &instr) {
-                instr.replaceAllUsesWith(var);
-                changed = true;
-            }
+
+        auto [var, constant] = h.getVarAndConstant(&instr);
+        if (constant == h.neutralConstant && var != &instr) {
+            instr.replaceAllUsesWith(var);
+            changed = true;
         }
-        else if(instr.getOpcode() == Instruction::And){
-                auto [var, constant] = getVarAndConstantShl(&instr);
-                if (constant == -1 && var != &instr) {
-                    instr.replaceAllUsesWith(var);
-                    changed = true;
-                }
-        }
-            
-        
     }
     return changed;
 }

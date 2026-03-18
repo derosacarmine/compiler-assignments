@@ -4,6 +4,13 @@ Implement three LLVM passes that achieve the following optimizations:
 1. ***Algebraic Identity***
 2. ***Strength Reduction***
 3. ***Multi-Instruction Optimization***
+## How To Test
+- To compile, go into the build folder and run the make command
+- To test, go into assignment_1 and run:
+    ./optimize_tests.sh -t ./tests/ -p ./build/libLocalOpts.so optimization-name
+
+---
+
 ## Code Explanation
 
 This is an **LLVM compiler plugin** that implements two optimization passes operating on LLVM's Intermediate Representation (IR).
@@ -78,8 +85,11 @@ multi-instruction optimization is the process of examining short sequences of in
 
 - `a = b+1, c = a-1 --> c = b`
 - `b*1 ,  1*b --> b`
+- `b*0, 0*b --> 0`
 - `b << 0, b >> 0, b | 0, b ^ 0--> b`
 - `(b & -1 → b)`
+- `b/1 -->b`
+- `0/b --> 0`
 ---
 
 ### Shared Structure
