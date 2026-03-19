@@ -328,21 +328,96 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
-//maps instructions to their target (the neutral element)
-std::map<unsigned, int> instrTargets = {
-    {Instruction::Add,  0},
-    {Instruction::Sub,  0},
-    {Instruction::Mul,  1},
-    {Instruction::UDiv, 1},
-    {Instruction::Shl,  0},
-    {Instruction::Or,   0},
-    {Instruction::Xor,  0},
-    {Instruction::AShr, 0},
-    {Instruction::LShr, 0},
-    {Instruction::And,  -1},
-};
+//we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
+Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
-std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
+    //we found the the value we can use to replace the instruction
+    if (currentOffset == target)
+        return v;
+
+    auto* instr = dyn_cast<Instruction>(v);
+
+    //we reached the last possible value
+    if (!instr) return nullptr;
+
+    int opCode = instr->getOpcode();
+
+    if(opCode != Instruction::Add && opCode != Instruction::Sub) return nullptr;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+
+    if(!constant) return nullptr;
+
+    if (opCode == Instruction::Add)
+        currentOffset = currentOffset + constant->getSExtValue();
+    else
+        currentOffset = currentOffset - constant->getSExtValue();
+
+    return searchEquivalentAddSub(var, target, currentOffset);
+
+}
+
+// For mul and div we utilise fraction operands in order to avoid division approximation errors 
+Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
+
+    //the target (1) is reached when numerator and denominator are the same
+    if (currentNum == currentDen)
+        return v;
+
+    auto* instr = dyn_cast<Instruction>(v);
+
+    if (!instr) return nullptr;
+
+    int opCode = instr->getOpcode();
+
+    if(opCode != Instruction::Mul && opCode != Instruction::SDiv) return nullptr;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+
+    if(!constant) return nullptr;
+
+    int conValue = constant->getSExtValue();
+
+    if(conValue == 0) return nullptr;
+
+    if (opCode == Instruction::Mul)
+        currentNum *= conValue;
+    else
+        currentDen *= conValue;
+        
+    return searchEquivalentMulDiv(var, currentNum, currentDen);
+}
+
+Value* searchEquivalentShift(Value* v, int target, int currentOffset){
+
+    //we found the the value we can use to replace the instruction
+    if (currentOffset == target)
+        return v;
+
+    auto* instr = dyn_cast<Instruction>(v);
+
+    //we reached the last possible value
+    if (!instr) return nullptr;
+
+    int opCode = instr->getOpcode();
+
+    if(opCode != Instruction::Shl && opCode != Instruction::AShr && opCode != Instruction::LShr) return nullptr;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+
+    if(!constant) return nullptr;
+
+    if (opCode == Instruction::Shl)
+        currentOffset = currentOffset + constant->getSExtValue();
+    else
+        currentOffset = currentOffset - constant->getSExtValue();
+
+    return searchEquivalentShift(var, target, currentOffset);
+
+}
+
+
+std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul};
 
 //returns the constant and variable value for the given instruction, if present, nullptr otherwise
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
@@ -360,38 +435,6 @@ std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutat
     Value* var = (constant == cst1) ? op2 : op1;
 
     return {constant, var};
-
-
-}
-
-//we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
-Value* searchEquivalentValue(Value* v, int target, int currentOffset){
-
-    //we found the the value we can use to replace the instruction
-    if (currentOffset == target)
-        return v;
-
-    auto* instr = dyn_cast<Instruction>(v);
-
-    //we reached the last possible value
-    if (!instr) return nullptr;
-
-    int opCode = instr->getOpcode();
-
-    //TODO: add support for other instructions
-    if(opCode != Instruction::Add && opCode != Instruction::Sub) return nullptr;
-
-    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
-
-    if(!constant) return nullptr;
-
-    if (opCode == Instruction::Add)
-        currentOffset = currentOffset + constant->getSExtValue();
-    else if (opCode == Instruction::Sub)
-        currentOffset = currentOffset - constant->getSExtValue();
-
-    return searchEquivalentValue(var, target, currentOffset);
-
 }
 
 bool runOnBasicBlock(BasicBlock &B) override {
@@ -400,19 +443,49 @@ bool runOnBasicBlock(BasicBlock &B) override {
         Instruction& instr = *it++;
 
         int opCode = instr.getOpcode();
-        auto it2 = instrTargets.find(opCode);
-        if (it2 == instrTargets.end()) continue;
+
+        if(instr.getNumOperands() != 2) continue;
+        //auto it2 = instrTargets.find(opCode);
+
+        //if (it2 == instrTargets.end()) continue;
 
         auto [constant, var] = getConstAndVal(&instr, commutativeOps.count(opCode) > 0);
 
         if(!constant) continue;
 
+        //int target = it2->second;
         int startOffset = constant->getSExtValue();
 
-        if(opCode == Instruction::Sub) 
+        if(opCode == Instruction::Sub || opCode == Instruction::AShr || opCode == Instruction::LShr) 
             startOffset = -startOffset;
         
-        auto eqValue = searchEquivalentValue(var, it2->second, startOffset);
+        Value* eqValue = nullptr;
+
+        
+        switch (opCode) {
+            case Instruction::Add:
+            case Instruction::Sub:
+                eqValue = searchEquivalentAddSub(var, 0, startOffset);
+                break;
+            
+            case Instruction::Mul:
+                eqValue = searchEquivalentMulDiv(var, startOffset, 1);
+                break;
+            case Instruction::SDiv:
+                eqValue = searchEquivalentMulDiv(var, 1, startOffset);
+                break;
+
+            case Instruction::Shl:
+            case Instruction::AShr:
+            case Instruction::LShr:
+                eqValue = searchEquivalentShift(var, 0, startOffset);
+                break;
+            
+            default:
+                continue;
+            
+        }
+
         if(eqValue){
             instr.replaceAllUsesWith(eqValue);
             instr.eraseFromParent();
