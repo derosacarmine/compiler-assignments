@@ -328,168 +328,95 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
-
-    struct OpHandler {
-        std::function<std::pair<Value*, int64_t>(Value*)> getVarAndConstant;    //recursive function
-        int64_t neutralConstant;
-        std::optional<std::function<Value*(Instruction&)>> zeroHandler; //for Mul and Div
-
-        //constructor
-        OpHandler(
-            std::function<std::pair<Value*, int64_t>(Value*)> fn,
-            int64_t neutral,
-            std::optional<std::function<Value*(Instruction&)>> zh = std::nullopt
-        ) : getVarAndConstant(fn), neutralConstant(neutral), zeroHandler(zh) {}
-    };
-
-
-    static Value* mulZero(Instruction& i) {
-        auto* c0 = dyn_cast<ConstantInt>(i.getOperand(0));
-        auto* c1 = dyn_cast<ConstantInt>(i.getOperand(1));
-        if (c0 && c0->isZero()) return c0;
-        if (c1 && c1->isZero()) return c1;
-        return nullptr; 
-    }
-
-    static Value* divZero(Instruction& i) {
-        auto* c0 = dyn_cast<ConstantInt>(i.getOperand(0));
-        return (c0 && c0->isZero()) ? c0 : nullptr;
-    }
-
- 
-
-
-/*
-    By recursively working your way up the chain, you accumulate the total constant. 
-    If the constant is ultimately 0, it means the current statement is equivalent to var, and you can use 
-    replaceAllUsesWith(var).
-  */
-
-static std::pair<Value*, int64_t> getVarAndConstantShl(Value* v) {
-    auto* instr = dyn_cast<Instruction>(v);
-    if (!instr) return {v, 1};
-
-    if(instr->getOpcode() == Instruction::Shl || instr->getOpcode() == Instruction::Or ||
-        instr->getOpcode() == Instruction::Xor  || instr->getOpcode() == Instruction::AShr 
-        || instr->getOpcode() == Instruction::LShr || instr->getOpcode() == Instruction::And){
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
-            auto [var, constant] = getVarAndConstantShl(instr->getOperand(0));
-            return {var, constant};
-        }
-    }
-
-
-    return {v, 1};
-}
-
-static std::pair<Value*, int64_t> getVarAndConstantDiv(Value* v) {
-    auto* instr = dyn_cast<Instruction>(v);
-    if (!instr) return {v, 1};
-
-    if(instr->getOpcode() == Instruction::UDiv){
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
-            auto [var, constant] = getVarAndConstantMul(instr->getOperand(0));
-            return {var, constant * cst->getSExtValue()};
-        }
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(0))) {
-            auto [var, constant] = getVarAndConstantMul(instr->getOperand(1));
-            return {var, constant * cst->getSExtValue()};
-        }
-    }
-
-
-    return {v, 1};
-}
-
-
-static std::pair<Value*, int64_t> getVarAndConstantMul(Value* v) {
-    auto* instr = dyn_cast<Instruction>(v);
-    if (!instr) return {v, 1};
-
-    if(instr->getOpcode() == Instruction::Mul){
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
-            auto [var, constant] = getVarAndConstantMul(instr->getOperand(0));
-            return {var, constant * cst->getSExtValue()};
-        }
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(0))) {
-            auto [var, constant] = getVarAndConstantMul(instr->getOperand(1));
-            return {var, constant * cst->getSExtValue()};
-        }
-    }
-
-
-    return {v, 1};
-}
-    
-
-static std::pair<Value*, int64_t> getVarAndConstantAddSub(Value* v) {
-    auto* instr = dyn_cast<Instruction>(v);
-    if (!instr) return {v, 0};
-
-    if (instr->getOpcode() == Instruction::Add) {
-
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
-            auto [var, constant] = getVarAndConstantAddSub(instr->getOperand(0));
-            return {var, constant + cst->getSExtValue()};
-        }
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(0))) {
-            auto [var, constant] = getVarAndConstantAddSub(instr->getOperand(1));
-            return {var, constant + cst->getSExtValue()};
-        }
-    }
-    if (instr->getOpcode() == Instruction::Sub) {
-        if (auto* cst = dyn_cast<ConstantInt>(instr->getOperand(1))) {
-            auto [var, constant] = getVarAndConstantAddSub(instr->getOperand(0));
-            return {var, constant - cst->getSExtValue()};
-        }
-    }
-
-    return {v, 0};
-}
-
-
-
-
-std::map<unsigned, OpHandler> handlers = {
-    {Instruction::Add,  {getVarAndConstantAddSub, 0}},
-    {Instruction::Sub,  {getVarAndConstantAddSub, 0}},
-    {Instruction::Mul,  {getVarAndConstantMul,    1, mulZero}},
-    {Instruction::UDiv, {getVarAndConstantDiv,    1, divZero}},
-    {Instruction::Shl,  {getVarAndConstantShl,    0}},
-    {Instruction::Or,   {getVarAndConstantShl,    0}},
-    {Instruction::Xor,  {getVarAndConstantShl,    0}},
-    {Instruction::AShr, {getVarAndConstantShl,    0}},
-    {Instruction::LShr, {getVarAndConstantShl,    0}},
-    {Instruction::And,  {getVarAndConstantShl,   -1}},
+std::map<unsigned, int> instrTargets = {
+    {Instruction::Add,  0},
+    {Instruction::Sub,  0},
+    {Instruction::Mul,  1},
+    {Instruction::UDiv, 1},
+    {Instruction::Shl,  0},
+    {Instruction::Or,   0},
+    {Instruction::Xor,  0},
+    {Instruction::AShr, 0},
+    {Instruction::LShr, 0},
+    {Instruction::And,  -1},
 };
 
+std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
+
+std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
+    auto op1 = instr->getOperand(0);
+    auto op2 = instr->getOperand(1);
+    auto cst1 = dyn_cast<ConstantInt>(op1);
+    auto cst2 = dyn_cast<ConstantInt>(op2);
+    
+    ConstantInt* constant = nullptr;
+    if (!commutative) constant = cst2;
+    else constant = (cst1 && !cst2) ? cst1 : (cst2 && !cst1) ? cst2 : nullptr;
+
+    if(!constant) return {nullptr, nullptr};
+
+    Value* var = (constant == cst1) ? op2 : op1;
+
+    return {constant, var};
+
+
+}
+Value* searchEquivalentValue(Value* v, int target, int currentOffset){
+
+    //we found the the value we can use to replace the instruction
+    if (currentOffset == target)
+        return v;
+
+    auto* instr = dyn_cast<Instruction>(v);
+
+    if (!instr) return nullptr;
+
+    int opCode = instr->getOpcode();
+
+    //TODO: add support for other instructions
+    if(opCode != Instruction::Add && opCode != Instruction::Sub) return nullptr;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+
+    if(!constant) return nullptr;
+
+    if (opCode == Instruction::Add)
+        currentOffset = currentOffset + constant->getSExtValue();
+    else if (instr->getOpcode() == Instruction::Sub)
+        currentOffset = currentOffset - constant->getSExtValue();
+
+    return searchEquivalentValue(var, target, currentOffset);
+
+}
 
 bool runOnBasicBlock(BasicBlock &B) override {
-    bool changed = false;
+    bool transformed = false;
     for (auto it = B.begin(); it != B.end();) {
         Instruction& instr = *it++;
 
-        auto it2 = handlers.find(instr.getOpcode());
-        if (it2 == handlers.end()) continue;
+        int opCode = instr.getOpcode();
+        auto it2 = instrTargets.find(opCode);
+        if (it2 == instrTargets.end()) continue;
 
-        const OpHandler& h = it2->second;
+        auto [constant, var] = getConstAndVal(&instr, commutativeOps.count(opCode) > 0);
 
-        if (h.zeroHandler) {
-            if (Value* zero = (*h.zeroHandler)(instr)) {
-                instr.replaceAllUsesWith(zero);
-                changed = true;
-                continue;
-            }
-        }
+        if(!constant) continue;
 
-        auto [var, constant] = h.getVarAndConstant(&instr);
-        if (constant == h.neutralConstant && var != &instr) {
-            instr.replaceAllUsesWith(var);
-            changed = true;
+        int startOffset = constant->getSExtValue();
+
+        if(opCode == Instruction::Sub) 
+            startOffset = -startOffset;
+        
+        auto eqValue = searchEquivalentValue(var, it2->second, startOffset);
+        if(eqValue){
+            instr.replaceAllUsesWith(eqValue);
+            instr.eraseFromParent();
+            transformed = true;
         }
     }
-    return changed;
+    return transformed;
 }
+
 };
 
 
