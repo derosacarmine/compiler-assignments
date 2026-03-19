@@ -328,6 +328,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
+//maps instructions to their target (the neutral element)
 std::map<unsigned, int> instrTargets = {
     {Instruction::Add,  0},
     {Instruction::Sub,  0},
@@ -343,6 +344,7 @@ std::map<unsigned, int> instrTargets = {
 
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
+//returns the constant and variable value for the given instruction, if present, nullptr otherwise
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
     auto op1 = instr->getOperand(0);
     auto op2 = instr->getOperand(1);
@@ -361,6 +363,8 @@ std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutat
 
 
 }
+
+//we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
 Value* searchEquivalentValue(Value* v, int target, int currentOffset){
 
     //we found the the value we can use to replace the instruction
@@ -369,6 +373,7 @@ Value* searchEquivalentValue(Value* v, int target, int currentOffset){
 
     auto* instr = dyn_cast<Instruction>(v);
 
+    //we reached the last possible value
     if (!instr) return nullptr;
 
     int opCode = instr->getOpcode();
@@ -382,7 +387,7 @@ Value* searchEquivalentValue(Value* v, int target, int currentOffset){
 
     if (opCode == Instruction::Add)
         currentOffset = currentOffset + constant->getSExtValue();
-    else if (instr->getOpcode() == Instruction::Sub)
+    else if (opCode == Instruction::Sub)
         currentOffset = currentOffset - constant->getSExtValue();
 
     return searchEquivalentValue(var, target, currentOffset);
