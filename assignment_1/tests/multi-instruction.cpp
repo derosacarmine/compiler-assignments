@@ -1,8 +1,12 @@
 int fun (int a, int b)
 {
     int c;
-    a = 0/b;
-    c = a * 1;
+    a = b * 3;
+    c = a / 3;
+
+    int d = a << 10;
+    int e = d >> 5;
+    int ret = e >> 5;
     
-    return c == 0;
+    return e;
 }
