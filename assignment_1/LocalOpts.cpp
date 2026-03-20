@@ -294,10 +294,14 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
             //if it's a mul, checks which value is the constant and call tryMulReduction to optimize the instruction
             case Instruction::Mul: {
-                auto* cst = cst1 ? cst1 : cst2;
-                if (!cst) continue;
-                Value* var = cst == cst1 ? op2 : op1;
-                newInsts = tryMulReduction(var, cst);
+                //auto* cst = cst1 ? cst1 : cst2;
+                for (auto cst : {cst1, cst2}){
+                    if (!cst) continue;
+                    Value* var = cst == cst1 ? op2 : op1;
+                    newInsts = tryMulReduction(var, cst);
+                    if(!newInsts.empty()) break;
+                }
+
                 break;
             }
 
