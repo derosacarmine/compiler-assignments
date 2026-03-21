@@ -178,14 +178,18 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
-//create an instruction where we subract from 0 in case of an operation with a negative value (i.e.  x * -1 => 0 - x )
-Instruction* createNegativeInstr(auto* type, Value* finalValue) {
+/**
+ * create an instruction where we subract from 0 in case of an operation with a negative value (i.e.  x * -1 => 0 - x )
+ */
+Instruction* createNegativeInstr(Type* type, Value* finalValue) {
     Value* zero = ConstantInt::get(type, 0);
     Instruction* neg = BinaryOperator::Create(Instruction::Sub, zero, finalValue);
     return neg;
 }
 
-// Returns a vector of operations, or {} if no reduction applies
+/**
+ * Returns a vector of operations, or an empty vector if no reduction applies
+ */
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     const APInt& originalVal = c->getValue();
     bool isNegative = originalVal.isNegative();
@@ -234,7 +238,7 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
           distLog = APInt(64, distLow).logBase2();
           finalOp = Instruction::Add;
           found = true;
-      } 
+      }
       else if (isPowerOf2_64(distHigh)) {
           mainLog = logHigh;
           distLog = APInt(64, distHigh).logBase2();
@@ -243,8 +247,12 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
       }
 
       if (found) {
-          auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
+          //if both are true then we'd be reducing the mul to 4 operations, not optimizing anything
+          //a first shift, a second shift, an add/sub, a sub for the negative constant
+          if (distLog > 0 && isNegative) return {};
           
+          auto* shl1 = BinaryOperator::Create(Instruction::Shl, var, ConstantInt::get(type, mainLog));
+
           //if distLog == 0, use var for the second operation (add/sub)
           Value* secondOperand = var;
           results.push_back(shl1);
@@ -271,7 +279,98 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     return results;
 }
 
+/**
+ * only works for powers of 2, because of that it just needs to check for negative values (if SDiv) and then shift by the result of the log in base 2
+ * if signed and negative then it adds a 0-x sub at the end
+ */
+std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSigned) {
+    std::vector<Instruction*> results;
+    Value* finalValue = nullptr;
+    
+    const APInt& originalVal = c->getValue();
+    bool isNegative = originalVal.isNegative();
+    
+    APInt abs_c = isNegative ? originalVal.abs() : originalVal;
+    
+    // reduce only if the constant is a power of 2
+    if (abs_c.isPowerOf2()) {
+        finalValue = op1;
 
+        if (abs_c.logBase2() > 0) {
+            Instruction* ashr = BinaryOperator::Create(
+                Instruction::AShr, op1,
+                ConstantInt::get(c->getType(), abs_c.logBase2())
+            );
+
+            results.push_back(ashr);
+            finalValue = ashr;
+        }
+
+        if (isNegative && finalValue && isSigned) {
+            Instruction* neg = createNegativeInstr(c->getType(), finalValue);
+            results.push_back(neg);
+        }
+    }
+    
+    return results;
+}
+
+/**
+ * formula: x - ((x >> k) << k)
+ * this function works with the signed rem, which would otherwise give wrong results for negative variables if not treated differently from positive ones
+ */
+std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
+    std::vector<Instruction*> results;
+
+    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
+    results.push_back(ashr);
+
+    Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
+    results.push_back(shl);
+
+    Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
+    results.push_back(sub);
+
+    return results;
+}
+
+/**
+ * if the variable is positive or unsigned then we just need to to an AND operation between the variable x and the constant-1
+ * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
+ * this deletes from the result the most significant bit of the variable and only leaves a sum between the other active bits from the variable
+ */
+std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absval) {
+    std::vector<Instruction*> results;
+
+    uint64_t maskValue = absVal.getZExtValue() - 1;
+    Instruction* andInst = BinaryOperator::Create(Instruction::And, op1, ConstantInt::get(type, maskValue));
+    results.push_back(andInst);
+
+    return results;
+}
+
+/**
+ * 
+ */
+std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool isSigned) {
+    std::vector<Instruction*> results;
+    const APInt& val = cst2->getValue();
+    
+    APInt absVal = isSigned ? val.abs() : val;
+
+    if (absVal.isPowerOf2()) {
+        Type* type = cst2->getType();
+        unsigned k = absVal.logBase2();
+
+        if (isSigned) {
+            results = trySRemReduction(op1, type, k);
+        } else {
+            results = tryURemReduction(op1, type, absval);
+        }
+    }
+
+    return results;
+}
 
 bool runOnBasicBlock(BasicBlock &B) override {
     //checks if we applied any optimizations
@@ -291,9 +390,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
         std::vector<Instruction*> newInsts;
 
         switch (instr.getOpcode()) {
-            //if it's a mul, checks which value is the constant and call tryMulReduction to optimize the instruction
-            case Instruction::Mul:
-                //auto* cst = cst1 ? cst1 : cst2;
+            case Instruction::Mul:{
                 for (auto cst : {cst1, cst2}){
                     if (!cst) continue;
                     Value* var = cst == cst1 ? op2 : op1;
@@ -301,23 +398,27 @@ bool runOnBasicBlock(BasicBlock &B) override {
                     if(!newInsts.empty()) break;
                 }
                 break;
-            
-            //if it's a div, do a shift right
-            case Instruction::SDiv:
-                if (cst2 && cst2->getValue().isPowerOf2()){
-                    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1,
-                                ConstantInt::get(cst2->getType(), cst2->getValue().logBase2()));
-                    newInsts.push_back(ashr);
+            }
 
-                    const APInt& originalVal = cst2->getValue();
-                    bool isNegative = originalVal.isNegative();
-                    if(isNegative) {
-                        auto* type = cst2->getType();
-                        Instruction* neg = createNegativeInstr(type, ashr);
-                        newInsts.push_back(neg);
-                    }
-                }
+            case Instruction::SDiv:{
+                if (cst2) newInsts = tryDivReduction(op1, cst2, true);
                 break;
+            }
+
+            case Instruction::UDiv:{
+                if (cst2) newInsts = tryDivReduction(op1, cst2, false);
+                break;
+            }
+
+            case Instruction::SRem:{
+                if (cst2) newInsts = tryRemReduction(op1, cst2, true);
+                break;
+            }
+
+            case Instruction::URem:{
+                if (cst2) newInsts = tryRemReduction(op1, cst2, false);
+                break;
+            }
 
             default: continue;
         }
