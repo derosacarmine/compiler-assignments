@@ -178,6 +178,13 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
+//create an instruction where we subract from 0 in case of an operation with a negative value (i.e.  x * -1 => 0 - x )
+Instruction* createNegativeInstr(auto* type, Value* finalValue) {
+    Value* zero = ConstantInt::get(type, 0);
+    Instruction* neg = BinaryOperator::Create(Instruction::Sub, zero, finalValue);
+    return neg;
+}
+
 // Returns a vector of operations, or {} if no reduction applies
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     const APInt& originalVal = c->getValue();
@@ -255,15 +262,16 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
       }
     }
 
-    //checks if we multiplied by a negative value, if so: 0 - the result
+    //checks if we multiplied by a negative value
     if (isNegative && finalValue) {
-      Value* zero = ConstantInt::get(type, 0);
-      Instruction* neg = BinaryOperator::Create(Instruction::Sub, zero, finalValue);
+      Instruction* neg = createNegativeInstr(type, finalValue);
       results.push_back(neg);
     }
 
     return results;
 }
+
+
 
 bool runOnBasicBlock(BasicBlock &B) override {
     //checks if we applied any optimizations
@@ -283,17 +291,8 @@ bool runOnBasicBlock(BasicBlock &B) override {
         std::vector<Instruction*> newInsts;
 
         switch (instr.getOpcode()) {
-            //if it's a div, do a shift right
-            case Instruction::SDiv:
-                if (cst2 && cst2->getValue().isPowerOf2()){
-                    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1,
-                                ConstantInt::get(cst2->getType(), cst2->getValue().logBase2()));
-                    newInsts.push_back(ashr);
-                }
-                break;
-
             //if it's a mul, checks which value is the constant and call tryMulReduction to optimize the instruction
-            case Instruction::Mul: {
+            case Instruction::Mul:
                 //auto* cst = cst1 ? cst1 : cst2;
                 for (auto cst : {cst1, cst2}){
                     if (!cst) continue;
@@ -301,9 +300,24 @@ bool runOnBasicBlock(BasicBlock &B) override {
                     newInsts = tryMulReduction(var, cst);
                     if(!newInsts.empty()) break;
                 }
-
                 break;
-            }
+            
+            //if it's a div, do a shift right
+            case Instruction::SDiv:
+                if (cst2 && cst2->getValue().isPowerOf2()){
+                    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1,
+                                ConstantInt::get(cst2->getType(), cst2->getValue().logBase2()));
+                    newInsts.push_back(ashr);
+
+                    const APInt& originalVal = cst2->getValue();
+                    bool isNegative = originalVal.isNegative();
+                    if(isNegative) {
+                        auto* type = cst2->getType();
+                        Instruction* neg = createNegativeInstr(type, ashr);
+                        newInsts.push_back(neg);
+                    }
+                }
+                break;
 
             default: continue;
         }
