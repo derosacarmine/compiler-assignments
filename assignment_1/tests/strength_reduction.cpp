@@ -15,6 +15,11 @@ int fun (int a, int b)
     int y = b * 56;
     int w = a * -1;
     int v = b * -4;
+
+    int r1 = a % 4;
+    unsigned int j = (unsigned int)a;
+    unsigned int r2 = b % 4;
+    int r3 = -a % 4;
     
     return v * - 24;
 }

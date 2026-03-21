@@ -25,7 +25,9 @@ namespace {
 
 
 
-  /* struct for common methods */
+  /**
+   * struct for common methods
+   */
 struct Common {
     /*It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.*/
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
@@ -37,9 +39,9 @@ struct Common {
         return PreservedAnalyses::all();
     }
 
-  /*
-  for each basic block of the fz it calls runOnBasickBlock
-  */
+  /**
+   * for each basic block of the fz it calls runOnBasicBlock
+   */
   bool runOnFunction(Function &F) {
     bool Transformed = false;
 
@@ -76,7 +78,9 @@ std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op
 std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
 
 
-/*Returns a function that takes the list of functions and tries them in order.*/
+/**
+ * Returns a function that takes the list of functions and tries them in order
+ */
 using Fn = std::function<Value*(ConstantInt*, Value*)>;
     
     static Fn firstOf(std::vector<Fn> fns) {
@@ -87,7 +91,9 @@ using Fn = std::function<Value*(ConstantInt*, Value*)>;
         };
     }
   
-// map used to simplify identities which have a constant
+/**
+ * map used to simplify identities which have a constant
+ */
 std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::Add, ifZeroReturnV},
     {Instruction::Sub, ifZeroReturnV},
@@ -105,7 +111,9 @@ std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::SRem, ifOneReturnZero}
 };
 
-// map used to simplify identities which have two identical operands
+/**
+ * map used to simplify identities which have two identical operands
+ */
 std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::Sub, ifOpsEqualReturnZero},
     {Instruction::SDiv, ifOpsEqualReturnOne},
@@ -118,12 +126,12 @@ std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
 
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
-/*
-It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
-and checks whether the two operands are constant or variable.
-If they're constant, it checks whether it's zero (in the case of adding) or
-1 (in the case of multiplying) and replaces the result of the operation
-with the variable operand.
+/**
+ * It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
+ * and checks whether the two operands are constant or variable.
+ * If they're constant, it checks whether it's zero (in the case of adding) or
+ * 1 (in the case of multiplying) and replaces the result of the operation
+ * with the variable operand.
  */
 bool runOnBasicBlock(BasicBlock &B) override {
   bool transformed = false;
@@ -189,6 +197,10 @@ Instruction* createNegativeInstr(Type* type, Value* finalValue) {
 
 /**
  * Returns a vector of operations, or an empty vector if no reduction applies
+ * differentiates between three cases:
+ * multiplication by -1
+ * when the constant is a power of 2
+ * when the constant is not a power of 2
  */
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     const APInt& originalVal = c->getValue();
@@ -202,7 +214,6 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     Value* finalValue = nullptr;
 
     //case 1: multiply by 1 (if original value is -1), do nothing and subtract from 0 at the end
-    //TODO: check if we can remove this if and if it's ok to have the extra shift (with 0) added be removed by the identities
     if (absVal.isOne() && isNegative) {
         finalValue = var;
     }
@@ -339,7 +350,7 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
  * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
  * this deletes from the result the most significant bit of the variable and only leaves a sum between the other active bits from the variable
  */
-std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absval) {
+std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absVal) {
     std::vector<Instruction*> results;
 
     uint64_t maskValue = absVal.getZExtValue() - 1;
@@ -350,7 +361,8 @@ std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absval)
 }
 
 /**
- * 
+ * calls the appropriate Rem reduction function based on the isSigned boolean as the signed one needs a different optimization
+ * which make negative variables usable at the cost of more instructions in the case of positive variables
  */
 std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool isSigned) {
     std::vector<Instruction*> results;
@@ -365,13 +377,26 @@ std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool is
         if (isSigned) {
             results = trySRemReduction(op1, type, k);
         } else {
-            results = tryURemReduction(op1, type, absval);
+            results = tryURemReduction(op1, type, absVal);
         }
     }
 
     return results;
 }
 
+/**
+ * It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
+ * and checks whether the two operands are constant or variable.
+ * If they're constant, it checks whether it's zero (in the case of adding) or
+ * 1 (in the case of multiplying) and replaces the result of the operation
+ * with the variable operand.
+ */
+
+/**
+ * it takes a basic block, evaluates for each instruction whether it's multiplying, dividing, or checking for remainder,
+ * and checks that we have two operands of which we'll need one to be a variable and one to be a constant.
+ * if they're both variables/constants then no optimization applies.
+ */
 bool runOnBasicBlock(BasicBlock &B) override {
     //checks if we applied any optimizations
     bool transformed = false;
