@@ -330,10 +330,44 @@ std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSig
  * formula: x - ((x >> k) << k)
  * this function works with the signed rem, which would otherwise give wrong results for negative variables if not treated differently from positive ones
  */
+// std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
+//     std::vector<Instruction*> results;
+
+//     Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
+//     results.push_back(ashr);
+
+//     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
+//     results.push_back(shl);
+
+//     Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
+//     results.push_back(sub);
+
+//     return results;
+// }
+
 std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     std::vector<Instruction*> results;
+    
+    // Assicuriamoci che type sia un tipo intero per prendere il bitwidth
+    unsigned bitwidth = type->getIntegerBitWidth();
 
-    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
+    // 1. Creiamo la maschera del segno: x >> (bitwidth - 1)
+    // Se x è negativo, diventa tutti 1 (-1). Se positivo, tutti 0.
+    Instruction* signMask = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, bitwidth - 1));
+    results.push_back(signMask);
+
+    // 2. Creiamo l'offset: (signMask) in logico (LShr) per (bitwidth - k)
+    // Se negativo: (-1) Lshr (32 - k) = (2^k - 1)
+    // Se positivo: 0 LShr ... = 0
+    Instruction* offset = BinaryOperator::Create(Instruction::LShr, signMask, ConstantInt::get(type, bitwidth - k));
+    results.push_back(offset);
+
+    // 3. Aggiungiamo l'offset al numero originale
+    Instruction* adjusted = BinaryOperator::Create(Instruction::Add, op1, offset);
+    results.push_back(adjusted);
+
+    // old logic
+    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
     results.push_back(ashr);
 
     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
@@ -344,7 +378,6 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 
     return results;
 }
-
 /**
  * if the variable is positive or unsigned then we just need to to an AND operation between the variable x and the constant-1
  * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
