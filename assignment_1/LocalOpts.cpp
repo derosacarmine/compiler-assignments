@@ -420,17 +420,16 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 }
 
-Value* searchEquivalentXor(Value* v int target, int currentOffset) {
+Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
     if(target == currentOffset) return v;
     
     auto* instr = dyn_cast<Instruction>(v);
-    int opCode = instr->getOpcode();
-    if (!instr || opCode != Instruction::Xor) return nullptr;
+    if (!instr || instr->getOpcode() != Instruction::Xor) return nullptr;
 
-    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(instr->getOpcode()) > 0);
     if(!constant) return nullptr;
 
-    currentOffset = currentOffset ^ constant->getSextValue();
+    currentOffset = currentOffset ^ constant->getZExtValue();
 
     return searchEquivalentXor(var, target, currentOffset);
 }
@@ -447,10 +446,10 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return prevVar;
         else
-            return searchEquivalentXor(var, 0, cst);
+            return searchEquivalentXor(var, 0, cst->getZExtValue());
     }
     // a = x & 5; b = a & 5 => b = a; same with the OR
-    else if (opCode == Instruction::And, opCode == Instruction::Or) {
+    else if (opCode == Instruction::And || opCode == Instruction::Or) {
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return var;
     }
@@ -523,7 +522,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
             case Instruction::And:
             case Instruction::Or:
             case Instruction::Xor:
-                eqValue = searchEquivalentBool(var, startOffset, opCode);
+                eqValue = searchEquivalentBool(var, constant, opCode);
             
             default:
                 continue;
