@@ -420,6 +420,21 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 }
 
+Value* searchEquivalentXor(Value* v int target, int currentOffset) {
+    if(target == currentOffset) return v;
+    
+    auto* instr = dyn_cast<Instruction>(v);
+    int opCode = instr->getOpcode();
+    if (!instr || opCode != Instruction::Xor) return nullptr;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(opCode) > 0);
+    if(!constant) return nullptr;
+
+    currentOffset = currentOffset ^ constant->getSextValue();
+
+    return searchEquivalentXor(var, target, currentOffset);
+}
+
 Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     auto* prevInstr = dyn_cast<Instruction>(var);
     if (!prevInstr || prevInstr->getOpcode() != opCode) return nullptr;
@@ -431,6 +446,8 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     if (opCode == Instruction::Xor) {
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return prevVar;
+        else
+            return searchEquivalentXor(var, 0, cst);
     }
     // a = x & 5; b = a & 5 => b = a; same with the OR
     else if (opCode == Instruction::And, opCode == Instruction::Or) {
@@ -506,7 +523,8 @@ bool runOnBasicBlock(BasicBlock &B) override {
             case Instruction::And:
             case Instruction::Or:
             case Instruction::Xor:
-                eqValue = searchEquivalentBool(var, startOffset, opCode)
+                eqValue = searchEquivalentBool(var, startOffset, opCode);
+            
             default:
                 continue;
             
