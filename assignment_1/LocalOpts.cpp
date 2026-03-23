@@ -345,24 +345,27 @@ std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSig
 //     return results;
 // }
 
+/**
+ * logic for the reduction of the signed remainder
+ */
 std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     std::vector<Instruction*> results;
     
-    // Assicuriamoci che type sia un tipo intero per prendere il bitwidth
+    // Ensure 'type' is an integer to retrieve bitwidth
     unsigned bitwidth = type->getIntegerBitWidth();
 
-    // 1. Creiamo la maschera del segno: x >> (bitwidth - 1)
-    // Se x è negativo, diventa tutti 1 (-1). Se positivo, tutti 0.
+    // 1. Create a sign mask: x >> (bitwidth - 1)
+    // If x is negative, it becomes all 1s (-1). If positive, all 0s.
     Instruction* signMask = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, bitwidth - 1));
     results.push_back(signMask);
 
-    // 2. Creiamo l'offset: (signMask) in logico (LShr) per (bitwidth - k)
-    // Se negativo: (-1) Lshr (32 - k) = (2^k - 1)
-    // Se positivo: 0 LShr ... = 0
+    // 2. Create the offset: logical shift (LShr) the signMask by (bitwidth - k)
+    // If negative: (-1) LShr (32 - k) = (2^k - 1)
+    // If positive: 0 LShr ... = 0
     Instruction* offset = BinaryOperator::Create(Instruction::LShr, signMask, ConstantInt::get(type, bitwidth - k));
     results.push_back(offset);
 
-    // 3. Aggiungiamo l'offset al numero originale
+    // 3. Add the offset to the original dividend to handle rounding towards zero
     Instruction* adjusted = BinaryOperator::Create(Instruction::Add, op1, offset);
     results.push_back(adjusted);
 
