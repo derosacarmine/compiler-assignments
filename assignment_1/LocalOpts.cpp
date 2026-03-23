@@ -29,7 +29,9 @@ namespace {
    * struct for common methods
    */
 struct Common {
-    /*It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.*/
+    /**
+     * It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.
+     */
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
@@ -40,7 +42,11 @@ struct Common {
     }
 
   /**
+<<<<<<< HEAD
    * for each basic block of the fz it calls runOnBasicBlock
+=======
+   * for each basic block of the fz it calls runOnBasickBlock
+>>>>>>> multi_instruction_bool
    */
   bool runOnFunction(Function &F) {
     bool Transformed = false;
@@ -124,6 +130,9 @@ std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::SRem, ifOpsEqualReturnZero},
 };
 
+/**
+ * set of commutative instructions
+ */
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
 /**
@@ -499,7 +508,9 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
-//we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
+/**
+ * we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
+ */
 Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
     //we found the the value we can use to replace the instruction
@@ -528,7 +539,9 @@ Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
 }
 
-// For mul and div we utilise fraction operands in order to avoid division approximation errors 
+/**
+ * For mul and div we utilise fraction operands in order to avoid division approximation errors 
+ */
 Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
 
     //the target (1) is reached when numerator and denominator are the same
@@ -559,6 +572,9 @@ Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
     return searchEquivalentMulDiv(var, currentNum, currentDen);
 }
 
+/**
+ * --------------0000000----------------------------- aggiungete un commento appropriato -------------------------------------------------------000000--------------
+ */
 Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
     //we found the the value we can use to replace the instruction
@@ -587,10 +603,61 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 }
 
+/**
+ * if we didn't find an instruction before the current one with the same opcode and constant then we 
+ * do a xor operation for each constant recursively, if we find one that makes the result 0 then we can
+ * replace the instruction with the operand variable of the instruction that has the constant that
+ * made the result 0
+ */
+Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
+    if(target == currentOffset) return v;
+    
+    auto* instr = dyn_cast<Instruction>(v);
+    if (!instr || instr->getOpcode() != Instruction::Xor) return nullptr;
 
-std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul};
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(instr->getOpcode()) > 0);
+    if(!constant) return nullptr;
 
-//returns the constant and variable value for the given instruction, if present, nullptr otherwise
+    currentOffset = currentOffset ^ constant->getZExtValue();
+
+    return searchEquivalentXor(var, target, currentOffset);
+}
+
+/**
+ * we check the previous instruction (only if it's the same type of instruction)
+ * to check whether it uses the same constant, if so then we can remove the current operation as the result doesn't change
+ */
+Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
+    auto* prevInstr = dyn_cast<Instruction>(var);
+    if (!prevInstr || prevInstr->getOpcode() != opCode) return nullptr;
+
+    auto [prevCst, prevVar] = getConstAndVal(prevInstr, commutativeOps.count(opCode) > 0);
+    if (!prevCst) return nullptr;
+
+    // a = x ^ 5; b = a ^ 5; => b = x
+    if (opCode == Instruction::Xor) {
+        if (cst->getZExtValue() == prevCst->getZExtValue())
+            return prevVar;
+        else
+            return searchEquivalentXor(var, 0, cst->getZExtValue());
+    }
+    // a = x & 5; b = a & 5 => b = a; same with the OR
+    else if (opCode == Instruction::And || opCode == Instruction::Or) {
+        if (cst->getZExtValue() == prevCst->getZExtValue())
+            return var;
+    }
+
+    return nullptr;
+}
+
+/**
+ * set of commutative instructions
+ */
+std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::And, Instruction::Or, Instruction::Xor};
+
+/**
+ * returns the constant and variable value for the given instruction, if present, nullptr otherwise
+ */
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
     auto op1 = instr->getOperand(0);
     auto op2 = instr->getOperand(1);
@@ -608,6 +675,14 @@ std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutat
     return {constant, var};
 }
 
+/**
+ * It takes a basic block, evaluates for each instruction the instructiion,
+ * and checks that there are two operands.
+ * it calls a function to check which is the variable and which the constant
+ * computes a starting offset (which is the value of the constant),
+ * changes the sign of the starting offset if the instruction is a sub or shift right,
+ * and finally calls the appropriate function based on the instruction.
+ */
 bool runOnBasicBlock(BasicBlock &B) override {
     bool transformed = false;
     for (auto it = B.begin(); it != B.end();) {
@@ -616,15 +691,11 @@ bool runOnBasicBlock(BasicBlock &B) override {
         int opCode = instr.getOpcode();
 
         if(instr.getNumOperands() != 2) continue;
-        //auto it2 = instrTargets.find(opCode);
-
-        //if (it2 == instrTargets.end()) continue;
 
         auto [constant, var] = getConstAndVal(&instr, commutativeOps.count(opCode) > 0);
 
         if(!constant) continue;
 
-        //int target = it2->second;
         int startOffset = constant->getSExtValue();
 
         if(opCode == Instruction::Sub || opCode == Instruction::AShr || opCode == Instruction::LShr) 
@@ -650,6 +721,12 @@ bool runOnBasicBlock(BasicBlock &B) override {
             case Instruction::AShr:
             case Instruction::LShr:
                 eqValue = searchEquivalentShift(var, 0, startOffset);
+                break;
+            
+            case Instruction::And:
+            case Instruction::Or:
+            case Instruction::Xor:
+                eqValue = searchEquivalentBool(var, constant, opCode);
                 break;
             
             default:
