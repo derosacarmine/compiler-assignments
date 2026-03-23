@@ -330,20 +330,18 @@ std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSig
  * formula: x - ((x >> k) << k)
  * this function works with the signed rem, which would otherwise give wrong results for negative variables if not treated differently from positive ones
  */
-// std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
-//     std::vector<Instruction*> results;
-
-//     Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
-//     results.push_back(ashr);
-
-//     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
-//     results.push_back(shl);
-
-//     Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
-//     results.push_back(sub);
-
-//     return results;
-// }
+/*
+std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
+    std::vector<Instruction*> results;
+    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
+    results.push_back(ashr);
+    Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
+    results.push_back(shl);
+    Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
+    results.push_back(sub);
+    return results;
+}
+*/
 
 /**
  * logic for the reduction of the signed remainder
@@ -381,6 +379,7 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 
     return results;
 }
+
 /**
  * if the variable is positive or unsigned then we just need to to an AND operation between the variable x and the constant-1
  * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
@@ -419,14 +418,6 @@ std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool is
 
     return results;
 }
-
-/**
- * It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
- * and checks whether the two operands are constant or variable.
- * If they're constant, it checks whether it's zero (in the case of adding) or
- * 1 (in the case of multiplying) and replaces the result of the operation
- * with the variable operand.
- */
 
 /**
  * it takes a basic block, evaluates for each instruction whether it's multiplying, dividing, or checking for remainder,
