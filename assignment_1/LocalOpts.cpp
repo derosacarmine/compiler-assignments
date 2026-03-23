@@ -454,7 +454,6 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
             return var;
     }
 
-
     return nullptr;
 }
 
@@ -523,6 +522,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
             case Instruction::Or:
             case Instruction::Xor:
                 eqValue = searchEquivalentBool(var, constant, opCode);
+                break;
             
             default:
                 continue;
