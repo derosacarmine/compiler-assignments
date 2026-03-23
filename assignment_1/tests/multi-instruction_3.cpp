@@ -12,8 +12,6 @@ int fun (int x)
     int w = x ^ 3;
     int y = w ^ 7;
     int z = y ^ 4;
-    //to show that the variable changed correctly
-    int i = z + 1;
 
     return z;
 }

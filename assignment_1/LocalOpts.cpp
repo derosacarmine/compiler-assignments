@@ -25,9 +25,13 @@ namespace {
 
 
 
-  /* struct for common methods */
+  /**
+   * struct for common methods
+   */
 struct Common {
-    /*It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.*/
+    /**
+     * It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.
+     */
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
@@ -37,9 +41,9 @@ struct Common {
         return PreservedAnalyses::all();
     }
 
-  /*
-  for each basic block of the fz it calls runOnBasickBlock
-  */
+  /**
+   * for each basic block of the fz it calls runOnBasickBlock
+   */
   bool runOnFunction(Function &F) {
     bool Transformed = false;
 
@@ -76,7 +80,9 @@ std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op
 std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
 
 
-/*Returns a function that takes the list of functions and tries them in order.*/
+/**
+ * Returns a function that takes the list of functions and tries them in order
+ */
 using Fn = std::function<Value*(ConstantInt*, Value*)>;
     
     static Fn firstOf(std::vector<Fn> fns) {
@@ -87,7 +93,9 @@ using Fn = std::function<Value*(ConstantInt*, Value*)>;
         };
     }
   
-// map used to simplify identities which have a constant
+/**
+ * map used to simplify identities which have a constant
+ */
 std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::Add, ifZeroReturnV},
     {Instruction::Sub, ifZeroReturnV},
@@ -105,7 +113,9 @@ std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::SRem, ifOneReturnZero}
 };
 
-// map used to simplify identities which have two identical operands
+/**
+ * map used to simplify identities which have two identical operands
+ */
 std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::Sub, ifOpsEqualReturnZero},
     {Instruction::SDiv, ifOpsEqualReturnOne},
@@ -116,14 +126,17 @@ std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::SRem, ifOpsEqualReturnZero},
 };
 
+/**
+ * set of commutative instructions
+ */
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
-/*
-It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
-and checks whether the two operands are constant or variable.
-If they're constant, it checks whether it's zero (in the case of adding) or
-1 (in the case of multiplying) and replaces the result of the operation
-with the variable operand.
+/**
+ * It takes a basic block, evaluates for each instruction whether it's adding or multiplying,
+ * and checks whether the two operands are constant or variable.
+ * If they're constant, it checks whether it's zero (in the case of adding) or
+ * 1 (in the case of multiplying) and replaces the result of the operation
+ * with the variable operand.
  */
 bool runOnBasicBlock(BasicBlock &B) override {
   bool transformed = false;
@@ -332,7 +345,9 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
-//we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
+/**
+ * we recursively check for values or instructions until we find one that matches our target (usually the neutral value for our operation)
+ */
 Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
     //we found the the value we can use to replace the instruction
@@ -361,7 +376,9 @@ Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
 }
 
-// For mul and div we utilise fraction operands in order to avoid division approximation errors 
+/**
+ * For mul and div we utilise fraction operands in order to avoid division approximation errors 
+ */
 Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
 
     //the target (1) is reached when numerator and denominator are the same
@@ -420,6 +437,12 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 }
 
+/**
+ * if we didn't find an instruction before the current one with the same opcode and constant then we 
+ * do a xor operation for each constant recursively, if we find one that makes the result 0 then we can
+ * replace the instruction with the operand variable of the instruction that has the constant that
+ * made the result 0
+ */
 Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
     if(target == currentOffset) return v;
     
@@ -434,6 +457,10 @@ Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
     return searchEquivalentXor(var, target, currentOffset);
 }
 
+/**
+ * we check the previous instruction (only if it's the same type of instruction)
+ * to check whether it uses the same constant, if so then we can remove the current operation as the result doesn't change
+ */
 Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     auto* prevInstr = dyn_cast<Instruction>(var);
     if (!prevInstr || prevInstr->getOpcode() != opCode) return nullptr;
@@ -457,10 +484,14 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     return nullptr;
 }
 
-
+/**
+ * set of commutative instructions
+ */
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::And, Instruction::Or, Instruction::Xor};
 
-//returns the constant and variable value for the given instruction, if present, nullptr otherwise
+/**
+ * returns the constant and variable value for the given instruction, if present, nullptr otherwise
+ */
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
     auto op1 = instr->getOperand(0);
     auto op2 = instr->getOperand(1);
@@ -478,6 +509,14 @@ std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutat
     return {constant, var};
 }
 
+/**
+ * It takes a basic block, evaluates for each instruction the instructiion,
+ * and checks that there are two operands.
+ * it calls a function to check which is the variable and which the constant
+ * computes a starting offset (which is the value of the constant),
+ * changes the sign of the starting offset if the instruction is a sub or shift right,
+ * and finally calls the appropriate function based on the instruction.
+ */
 bool runOnBasicBlock(BasicBlock &B) override {
     bool transformed = false;
     for (auto it = B.begin(); it != B.end();) {
