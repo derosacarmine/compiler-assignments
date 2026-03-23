@@ -420,8 +420,30 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 }
 
+Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
+    auto* prevInstr = dyn_cast<Instruction>(var);
+    if (!prevInstr || prevInstr->getOpcode() != opCode) return nullptr;
 
-std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul};
+    auto [prevCst, prevVar] = getConstAndVal(prevInstr, commutativeOps.count(opCode) > 0);
+    if (!prevCst) return nullptr;
+
+    // a = x ^ 5; b = a ^ 5; => b = x
+    if (opCode == Instruction::Xor) {
+        if (cst->getZExtValue() == prevCst->getZExtValue())
+            return prevVar;
+    }
+    // a = x & 5; b = a & 5 => b = a; same with the OR
+    else if (opCode == Instruction::And, opCode == Instruction::Or) {
+        if (cst->getZExtValue() == prevCst->getZExtValue())
+            return var;
+    }
+
+
+    return nullptr;
+}
+
+
+std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::And, Instruction::Or, Instruction::Xor};
 
 //returns the constant and variable value for the given instruction, if present, nullptr otherwise
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
@@ -481,6 +503,10 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 eqValue = searchEquivalentShift(var, 0, startOffset);
                 break;
             
+            case Instruction::And:
+            case Instruction::Or:
+            case Instruction::Xor:
+                eqValue = searchEquivalentBool(var, startOffset, opCode)
             default:
                 continue;
             
