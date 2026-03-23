@@ -449,15 +449,11 @@ bool runOnBasicBlock(BasicBlock &B) override {
         int opCode = instr.getOpcode();
 
         if(instr.getNumOperands() != 2) continue;
-        //auto it2 = instrTargets.find(opCode);
-
-        //if (it2 == instrTargets.end()) continue;
 
         auto [constant, var] = getConstAndVal(&instr, commutativeOps.count(opCode) > 0);
 
         if(!constant) continue;
 
-        //int target = it2->second;
         int startOffset = constant->getSExtValue();
 
         if(opCode == Instruction::Sub || opCode == Instruction::AShr || opCode == Instruction::LShr) 
