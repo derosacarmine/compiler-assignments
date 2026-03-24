@@ -305,7 +305,7 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
  * only works for powers of 2, because of that it just needs to check for negative values (if SDiv) and then shift by the result of the log in base 2
  * if signed and negative then it adds a 0-x sub at the end
  */
-std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSigned) {
+std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c) {
     std::vector<Instruction*> results;
     Value* finalValue = nullptr;
     
@@ -328,7 +328,7 @@ std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c, bool isSig
             finalValue = ashr;
         }
 
-        if (isNegative && finalValue && isSigned) {
+        if (isNegative && finalValue) {
             Instruction* neg = createNegativeInstr(c->getType(), finalValue);
             results.push_back(neg);
         }
@@ -467,13 +467,9 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 break;
             }
 
-            case Instruction::SDiv:{
-                if (cst2) newInsts = tryDivReduction(op1, cst2, true);
-                break;
-            }
-
+            case Instruction::SDiv:
             case Instruction::UDiv:{
-                if (cst2) newInsts = tryDivReduction(op1, cst2, false);
+                if (cst2) newInsts = tryDivReduction(op1, cst2, true);
                 break;
             }
 
@@ -515,8 +511,12 @@ bool runOnBasicBlock(BasicBlock &B) override {
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
 /**
- * we recursively check for values or instructions until we find one that matches our target 
- * (usually the neutral value for our operation)
+ * we recursively check for instructions with either one of the two opcodes
+ * and keep applying that operation on our constant operands until we either
+ * find an instruction with a different opcode, reach the end of the chain of
+ * instructions, or find one that matches our target.
+ * in the last case: if a constant yields the desired offset, the instruction is replaced with the
+ * operand variable of the matching instruction
  */
 Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 
@@ -547,7 +547,11 @@ Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
 }
 
 /**
- * For mul and div we utilise fraction operands in order to avoid division approximation errors 
+ * For mul and div we utilise fraction operands in order to avoid division approximation errors.
+ * we keep computing until we find an instruction with a different operation,
+ * reach the end of the instructions,
+ * or find a constant that yields the desired offset (in this case it's when numerator and denominator are equal, aka 1),
+ * if we do the instruction is replaced with the operand variable of the matching instruction
  */
 Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
 
@@ -580,7 +584,12 @@ Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
 }
 
 /**
- * --------------0000000----------------------------- aggiungete un commento appropriato -------------------------------------------------------000000--------------
+ * we recursively check for instructions with either one of the two opcodes
+ * and keep summing(left-shift)/subtracting(right-shift) on our constant operands until we either
+ * find an instruction with a different opcode, reach the end of the chain of
+ * instructions, or find one that matches our target.
+ * in the last case: if a constant yields the desired offset, the instruction is replaced with the
+ * operand variable of the matching instruction
  */
 Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
@@ -612,7 +621,7 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
 /**
  * if the previous instruction doesn't share the same opcode and costant, we recursively XOR each constant.
- * if a constant yields a zero result, the instruction can be, and is, replaced with the operand variable
+ * if a constant yields the desired target offset, the instruction can be, and is, replaced with the operand variable
  * of the matching instruction.
  */
 Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
