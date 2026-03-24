@@ -469,7 +469,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
             case Instruction::SDiv:
             case Instruction::UDiv:{
-                if (cst2) newInsts = tryDivReduction(op1, cst2, true);
+                if (cst2) newInsts = tryDivReduction(op1, cst2);
                 break;
             }
 
@@ -653,10 +653,11 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
 
     // a = x ^ 5; b = a ^ 5; => b = x
     if (opCode == Instruction::Xor) {
+        // k1 XOR k2, where k1 == k2, => 0
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return prevVar;
         else
-            return searchEquivalentXor(var, 0, cst->getZExtValue());
+            return searchEquivalentXor(prevVar, 0, cst->getZExtValue() ^ prevCst->getZExtValue());
     }
     // a = x & 5; b = a & 5 => b = a; same for OR
     else if (opCode == Instruction::And || opCode == Instruction::Or) {

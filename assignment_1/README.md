@@ -74,9 +74,18 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 | Sum of 2 powers | `x * 40` | `(x << 5) + (x << 3)` |
 | Sub of 2 powers | `x * 56` | `(x << 6) - (x << 3)` | 
 
-**Integer Division (`SDiv`):**
+**Integer Division (`SDiv/Udiv`):**
 - If the divisor is a power of 2 → arithmetic right shift (`AShr`)
 - Example: `x / 4` → `x >> 2`
+
+**Integer Signed Remainder (`SRem`):**
+DA MIGLIORARE
+| Power of 2 | `x % 8` | `(((x >> 31) << 29) + x) >> 3` |
+| negative variable | `-x % 8` | `` |
+
+**Integer Unsigned Remainder (`URem`):**
+- if the constant is a power of 2 → subtract 1 from the constant and do an (`And`)
+- Example: `x % 4` → `x & 3`
 
 ---
 
@@ -86,6 +95,11 @@ Instructions can be removed if their value can be obtained from previous instruc
 - `a = b+1, c = a-1 --> c = b`
 - `a = b*3, c = a/3 --> c = b`
 - `a = b << 3, c = a >> 3 --> c = b`
+- `a = b & 5, c = a & 5 --> c = a`
+- `a = b | 5, c = a | 5 --> c = a`
+- `a = b ^ 5, c = a ^ 5 --> c = b`
+- `a = b ^ 3, c = a ^ 7, d = c ^ 4 --> d = b`
+
 ---
 
 ### Shared Structure

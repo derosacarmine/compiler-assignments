@@ -29,3 +29,4 @@ write a new Back-end.
 # Contributors
 - [Carmine De Rosa](https://github.com/derosacarmine/)
 - [Manuel Gherardi](https://github.com/GHManu)
+- [Arild Kuti](https://github.com/Ari-LD)
