@@ -79,9 +79,10 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 - Example: `x / 4` → `x >> 2`
 
 **Integer Signed Remainder (`SRem`):**
-DA MIGLIORARE
-| Power of 2 | `x % 8` | `(((x >> 31) << 29) + x) >> 3` |
-| negative variable | `-x % 8` | `` |
+| Case | Example | Replacement |
+|---|---|---|
+| Power of 2 | `x % 8` | `x - (((x >> 32-1) << 32-log2(cst)) + x)` |
+| Negative variable | `-x % 8` | `-x - (((-x >> 32-1) << 32-log2(cst)) - x)` |
 
 **Integer Unsigned Remainder (`URem`):**
 - if the constant is a power of 2 → subtract 1 from the constant and do an (`And`)

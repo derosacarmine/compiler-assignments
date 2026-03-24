@@ -379,11 +379,12 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     results.push_back(adjusted);
 
     // old logic
-    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
+    //check if these two instructions can be removed
+    /*Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
     results.push_back(ashr);
 
     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
-    results.push_back(shl);
+    results.push_back(shl);*/
 
     Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
     results.push_back(sub);

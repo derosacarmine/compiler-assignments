@@ -16,16 +16,10 @@ int fun (int a, int b)
     int w = a * -1;
     int v = b * -4;
     
-        a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;
-
     int r1 = b % 8;
-
-        a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;
     unsigned int j = (unsigned int)a;
     unsigned int r2 = b % 4;
-        a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;
     int r3 = -a % 8;
-        a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;    a = a + 2;
     
     return v * - 24;
 }
