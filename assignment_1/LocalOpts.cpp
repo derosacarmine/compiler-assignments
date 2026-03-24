@@ -378,13 +378,11 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     Instruction* adjusted = BinaryOperator::Create(Instruction::Add, op1, offset);
     results.push_back(adjusted);
 
-    // old logic
-    //check if these two instructions can be removed
-    /*Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
+    //push 
+    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
     results.push_back(ashr);
-
     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
-    results.push_back(shl);*/
+    results.push_back(shl);
 
     Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
     results.push_back(sub);
@@ -592,6 +590,7 @@ Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
  * in the last case: if a constant yields the desired offset, the instruction is replaced with the
  * operand variable of the matching instruction
  */
+/*
 Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 
     //we found the the value we can use to replace the instruction
@@ -617,8 +616,8 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
         currentOffset = currentOffset - constant->getSExtValue();
 
     return searchEquivalentShift(var, target, currentOffset);
-
 }
+*/
 
 /**
  * if the previous instruction doesn't share the same opcode and costant, we recursively XOR each constant.
@@ -735,11 +734,13 @@ bool runOnBasicBlock(BasicBlock &B) override {
                 eqValue = searchEquivalentMulDiv(var, 1, startOffset);
                 break;
 
+            /*
             case Instruction::Shl:
             case Instruction::AShr:
             case Instruction::LShr:
                 eqValue = searchEquivalentShift(var, 0, startOffset);
                 break;
+            */
             
             case Instruction::And:
             case Instruction::Or:

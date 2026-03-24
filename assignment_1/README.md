@@ -81,8 +81,8 @@ Replaces **expensive** operations (multiplications and divisions) with **cheaper
 **Integer Signed Remainder (`SRem`):**
 | Case | Example | Replacement |
 |---|---|---|
-| Power of 2 | `x % 8` | `x - (((x >> 32-1) << 32-log2(cst)) + x)` |
-| Negative variable | `-x % 8` | `-x - (((-x >> 32-1) << 32-log2(cst)) - x)` |
+| Power of 2 | `x % 8` | `x - (((((x >> 32-1) << 32-log2(cst)) + x) >> log2(cst)) << log2(cst))` |
+| Negative var | `-x % 8` | `-x - (((((-x >> 32-1) << 32-log2(cst)) - x) >> log2(cst)) << log2(cst))` |
 
 **Integer Unsigned Remainder (`URem`):**
 - if the constant is a power of 2 → subtract 1 from the constant and do an (`And`)
