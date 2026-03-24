@@ -207,11 +207,11 @@ Instruction* createNegativeInstr(Type* type, Value* finalValue) {
 }
 
 /**
- * Returns a vector of operations, or an empty vector if no reduction applies
+ * Returns a vector of instructions for the reduction, or an empty vector if no optimization is applicable.
  * differentiates between three cases:
- * multiplication by -1
- * constant power of 2
- * constant not power of 2
+ * negation (multiplication by -1)
+ * power of two scaling
+ * general constant multiplication
  */
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     const APInt& originalVal = c->getValue();
