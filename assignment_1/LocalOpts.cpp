@@ -623,7 +623,7 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
  * if a constant yields the desired target offset, the instruction can be, and is, replaced with the operand variable
  * of the matching instruction.
  */
-Value* searchEquivalentXor(Value* v, uint64_t currentOffset,  uint64_t target=0) {
+Value* searchEquivalentXor(Value* v, unsigned currentOffset,  int target=0) {
     if(target == currentOffset) return v;
     
     auto* instr = dyn_cast<Instruction>(v);
