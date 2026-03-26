@@ -656,7 +656,7 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return prevVar;
         else
-            return searchEquivalentXor(prevVar, 0, cst->getZExtValue() ^ prevCst->getZExtValue());
+            return searchEquivalentXor(prevVar, cst->getZExtValue() ^ prevCst->getZExtValue());
     }
     // a = x & 5; b = a & 5 => b = a; same for OR
     else if (opCode == Instruction::And || opCode == Instruction::Or) {
