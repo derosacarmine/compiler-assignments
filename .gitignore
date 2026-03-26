@@ -4,3 +4,4 @@ build
 .clangd
 ll
 optimized
+doc
