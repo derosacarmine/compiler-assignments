@@ -517,7 +517,7 @@ struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
  * in the last case: if a constant yields the desired offset, the instruction is replaced with the
  * operand variable of the matching instruction
  */
-Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
+Value* searchEquivalentAddSub(Value* v, int currentOffset, int target=0){
 
     //we found the the value we can use to replace the instruction
     if (currentOffset == target)
@@ -541,10 +541,9 @@ Value* searchEquivalentAddSub(Value* v, int target, int currentOffset){
     else
         currentOffset = currentOffset - constant->getSExtValue();
 
-    return searchEquivalentAddSub(var, target, currentOffset);
+    return searchEquivalentAddSub(var, currentOffset);
 
 }
-
 /**
  * For mul and div we utilise fraction operands in order to avoid division approximation errors.
  * we keep computing until we find an instruction with a different operation,
@@ -624,7 +623,7 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
  * if a constant yields the desired target offset, the instruction can be, and is, replaced with the operand variable
  * of the matching instruction.
  */
-Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
+Value* searchEquivalentXor(Value* v, uint64_t currentOffset,  uint64_t target=0) {
     if(target == currentOffset) return v;
     
     auto* instr = dyn_cast<Instruction>(v);
@@ -635,7 +634,7 @@ Value* searchEquivalentXor(Value* v, uint64_t target, uint64_t currentOffset) {
 
     currentOffset = currentOffset ^ constant->getZExtValue();
 
-    return searchEquivalentXor(var, target, currentOffset);
+    return searchEquivalentXor(var, currentOffset);
 }
 
 /**
@@ -724,7 +723,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
         switch (opCode) {
             case Instruction::Add:
             case Instruction::Sub:
-                eqValue = searchEquivalentAddSub(var, 0, startOffset);
+                eqValue = searchEquivalentAddSub(var, startOffset);
                 break;
             
             case Instruction::Mul:
