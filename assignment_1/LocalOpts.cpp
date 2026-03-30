@@ -23,21 +23,27 @@ using namespace llvm;
 
 namespace {
 
-
-
-  /**
-   * struct for common methods
-   */
+    /**
+     * @brief struct for common methods
+     * 
+     */
 struct Common {
     /**
-     * It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.
+     * @brief It iterates over each instruction and attempts to replace expensive operations with cheaper equivalents.
+     * 
+     * @param B 
+     * @return true 
+     * @return false 
      */
     virtual bool runOnBasicBlock(BasicBlock &B) = 0;
     
     /**
-     * the starting point, it calls runOnFunction with the given function,
+     * @brief the starting point, it calls runOnFunction with the given function,
      * which will in turn iterate over each of its basic blocks calling runOnBasicBlock
-     * for each of them. eventually returns whether there were changes ("preserved" "none") or not ("all" preserved as it was) 
+     * for each of them. eventually returns whether there were changes ("preserved" "none") or not ("all" preserved as is) 
+     * 
+     * @param F 
+     * @return PreservedAnalyses 
      */
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &) {
         if(runOnFunction(F))
@@ -47,7 +53,11 @@ struct Common {
     }
 
   /**
-   * for each basic block of the fz it calls runOnBasickBlock
+   * @brief for each basic block of the fz it calls runOnBasickBlock
+   * 
+   * @param F 
+   * @return true 
+   * @return false 
    */
   bool runOnFunction(Function &F) {
     bool Transformed = false;
@@ -60,7 +70,14 @@ struct Common {
 
     return Transformed;
   }
-    static bool isRequired() { return true; }
+
+  /**
+   * @brief required
+   * 
+   * @return true 
+   * @return false 
+   */
+  static bool isRequired() { return true; }
 
 
 
@@ -72,24 +89,34 @@ struct Common {
 struct AlgebraicIdentity: PassInfoMixin<AlgebraicIdentity>, Common {
 
 
-//for constantMap
+/**
+ * @brief for constantMap
+ */
 std::function<Value*(ConstantInt* c, Value* v)> ifZeroReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? v : nullptr;};
 std::function<Value*(ConstantInt* c, Value* v)> ifOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? v : nullptr;};
 std::function<Value*(ConstantInt* c, Value* v)> ifOneReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isOne() ? ConstantInt::get(c->getType(), 0) : nullptr;};
 std::function<Value*(ConstantInt* c, Value* v)> ifZeroReturnZero = [](ConstantInt* c, Value* v) -> Value* { return c->isZero() ? ConstantInt::get(c->getType(), 0) : nullptr;};
 std::function<Value*(ConstantInt* c, Value* v)> ifMinusOneReturnV = [](ConstantInt* c, Value* v) -> Value* { return c->isMinusOne() ? v : nullptr;};
 
-//for variableMap
+/**
+ * @brief for variableMap
+ */
 std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnZero = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 0) : nullptr;};
 std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOne = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? ConstantInt::get(op1->getType(), 1) : nullptr;};
 std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op1, Value* op2) -> Value* { return (op1 == op2) ? op1 : nullptr;};
 
 
 /**
- * Returns a function that takes the list of functions and tries them in order
+ * @brief Returns a function that takes the list of functions and tries them in order
  */
 using Fn = std::function<Value*(ConstantInt*, Value*)>;
     
+    /**
+     * @brief 
+     * 
+     * @param fns 
+     * @return Fn 
+     */
     static Fn firstOf(std::vector<Fn> fns) {
         return [fns](ConstantInt* c, Value* v) -> Value* {
             for (auto& fn : fns)
@@ -99,7 +126,7 @@ using Fn = std::function<Value*(ConstantInt*, Value*)>;
     }
   
 /**
- * map used to simplify identities which have a constant
+ * @brief map used to simplify identities which have a constant
  */
 std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
     {Instruction::Add, ifZeroReturnV},
@@ -119,7 +146,7 @@ std::map<unsigned, std::function<Value*(ConstantInt*, Value*)>> constantMap = {
 };
 
 /**
- * map used to simplify identities which have two identical operands
+ * @brief map used to simplify identities which have two identical operands
  */
 std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
     {Instruction::Sub, ifOpsEqualReturnZero},
@@ -132,16 +159,20 @@ std::map<unsigned, std::function<Value*(Value*, Value*)>> variablesMap = {
 };
 
 /**
- * set of commutative instructions
+ * @brief set of commutative instructions
  */
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::Or, Instruction::And, Instruction::Xor};
 
 /**
- * performs algebraic simplification on instructions within a basic block.
+ * @brief performs algebraic simplification on instructions within a basic block.
  * it identifies binary operations (which can have either constant operands or also a variable and a constant)
  * and checks if they represent an identity element (e.g. adding 0, multiplying or dividing by 1).
  * it a simplification is possible, the instruction is replaced by it's variable operand which is propagated
  * in place of all future uses of that instruction which is then removed
+ * 
+ * @param B 
+ * @return true 
+ * @return false 
  */
 bool runOnBasicBlock(BasicBlock &B) override {
   bool transformed = false;
@@ -197,8 +228,12 @@ bool runOnBasicBlock(BasicBlock &B) override {
 struct StrengthReduction: PassInfoMixin<StrengthReduction>, Common {
 
 /**
- * generates an instruction to negate the resulting value by subtracting it from 0.
+ * @brief generates an instruction to negate the resulting value by subtracting it from 0.
  * this handles operations involgin negative coefficients (e.g.  x * -1 => 0 - x )
+ * 
+ * @param type 
+ * @param finalValue 
+ * @return Instruction* 
  */
 Instruction* createNegativeInstr(Type* type, Value* finalValue) {
     Value* zero = ConstantInt::get(type, 0);
@@ -207,11 +242,15 @@ Instruction* createNegativeInstr(Type* type, Value* finalValue) {
 }
 
 /**
- * Returns a vector of instructions for the reduction, or an empty vector if no optimization is applicable.
+ * @brief Returns a vector of instructions for the reduction, or an empty vector if no optimization is applicable.
  * differentiates between three cases:
  * negation (multiplication by -1)
  * power of two scaling
  * general constant multiplication
+ * 
+ * @param var 
+ * @param c 
+ * @return std::vector<Instruction*> 
  */
 std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     const APInt& originalVal = c->getValue();
@@ -302,8 +341,12 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
 }
 
 /**
- * only works for powers of 2, because of that it just needs to check for negative values (if SDiv) and then shift by the result of the log in base 2
+ * @brief only works for powers of 2, because of that it just needs to check for negative values (if SDiv) and then shift by the result of the log in base 2
  * if signed and negative then it adds a 0-x sub at the end
+ * 
+ * @param op1 
+ * @param c 
+ * @return std::vector<Instruction*> 
  */
 std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c) {
     std::vector<Instruction*> results;
@@ -355,7 +398,12 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 */
 
 /**
- * logic for the reduction of the signed remainder
+ * @brief logic for the reduction of the signed remainder
+ * 
+ * @param op1 
+ * @param type 
+ * @param k 
+ * @return std::vector<Instruction*> 
  */
 std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     std::vector<Instruction*> results;
@@ -391,9 +439,14 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 }
 
 /**
- * we just need to to an AND operation between the variable x and the constant-1
+ * @brief we just need to to an AND operation between the variable x and the constant-1
  * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
  * this deletes from the result the most significant bit of the variable and only leaves a sum between the other active bits from the variable
+ * 
+ * @param op1 
+ * @param type 
+ * @param absVal 
+ * @return std::vector<Instruction*> 
  */
 std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absVal) {
     std::vector<Instruction*> results;
@@ -406,10 +459,15 @@ std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absVal)
 }
 
 /**
- * calls the appropriate Rem reduction function based on the isSigned boolean as the signed one 
+ * @brief calls the appropriate Rem reduction function based on the isSigned boolean as the signed one 
  * needs a different optimization in case of a negative variable, this is at the cost
  * of a worse optimization for the SRem in the case of a positive variable which could be optimized
  * the same as the URem.
+ * 
+ * @param op1 
+ * @param cst2 
+ * @param isSigned 
+ * @return std::vector<Instruction*> 
  */
 std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool isSigned) {
     std::vector<Instruction*> results;
@@ -432,11 +490,15 @@ std::vector<Instruction*> tryRemReduction(Value* op1, ConstantInt* cst2, bool is
 }
 
 /**
- * iterates through a basic block to analyze each instruction's operation.
+ * @brief iterates through a basic block to analyze each instruction's operation.
  * it verifies that the instruction has exactly two operands, a variable and a constant,
  * otherwise it skips optimization. it then dispatched the appropriate reduction function based on
  * the opcode. if optimized, the new instructio(s) are inserted right after the original,
  * which is then removed.
+ * 
+ * @param B 
+ * @return true 
+ * @return false 
  */
 bool runOnBasicBlock(BasicBlock &B) override {
     //checks if we applied any optimizations
@@ -510,14 +572,19 @@ bool runOnBasicBlock(BasicBlock &B) override {
 struct MultiInstruction : PassInfoMixin<MultiInstruction>, Common{
 
 /**
- * we recursively check for instructions with either one of the two opcodes
+ * @brief we recursively check for instructions with either one of the two opcodes
  * and keep applying that operation on our constant operands until we either
  * find an instruction with a different opcode, reach the end of the chain of
  * instructions, or find one that matches our target.
  * in the last case: if a constant yields the desired offset, the instruction is replaced with the
  * operand variable of the matching instruction
+ * 
+ * @param v 
+ * @param currentOffset 
+ * @param target 
+ * @return Value* 
  */
-Value* searchEquivalentAddSub(Value* v, int currentOffset, int target=0){
+Value* searchEquivalentAddSub(Value* v, int currentOffset, int target = 0){
 
     //we found the the value we can use to replace the instruction
     if (currentOffset == target)
@@ -544,12 +611,18 @@ Value* searchEquivalentAddSub(Value* v, int currentOffset, int target=0){
     return searchEquivalentAddSub(var, currentOffset);
 
 }
+
 /**
- * For mul and div we utilise fraction operands in order to avoid division approximation errors.
+ * @brief For mul and div we utilise fraction operands in order to avoid division approximation errors.
  * we keep computing until we find an instruction with a different operation,
  * reach the end of the instructions,
  * or find a constant that yields the desired offset (in this case it's when numerator and denominator are equal, aka 1),
  * if we do the instruction is replaced with the operand variable of the matching instruction
+ * 
+ * @param v 
+ * @param currentNum 
+ * @param currentDen 
+ * @return Value* 
  */
 Value* searchEquivalentMulDiv(Value* v, int currentNum, int currentDen){
 
@@ -618,12 +691,16 @@ Value* searchEquivalentShift(Value* v, int target, int currentOffset){
 }
 */
 
-/**
- * if the previous instruction doesn't share the same opcode and costant, we recursively XOR each constant.
- * if a constant yields the desired target offset, the instruction can be, and is, replaced with the operand variable
- * of the matching instruction.
- */
-Value* searchEquivalentXor(Value* v, unsigned currentOffset,  int target=0) {
+ /**
+  * @brief if the previous instruction doesn't share the same opcode and costant, we recursively XOR each constant.
+  * if a constant yields the desired target offset the instruction can be, and is, replaced with the operand variable
+  * of the matching instruction.
+  * @param v 
+  * @param currentOffset 
+  * @param target 
+  * @return Value* 
+  */
+Value* searchEquivalentXor(Value* v, int currentOffset, int target = 0) {
     if(target == currentOffset) return v;
     
     auto* instr = dyn_cast<Instruction>(v);
@@ -638,10 +715,43 @@ Value* searchEquivalentXor(Value* v, unsigned currentOffset,  int target=0) {
 }
 
 /**
- * we check that the previous instruction shares the same opcode and constant,
+ * @brief if the previous instruction doesn't share the same opcode and costant, we recursively AND each constant.
+ * if a constant yields the desired target offset the instruction can be, and is, replaced with 0.
+ * this only works with 0 as that means that the current instruction will yield a 0 result no matter what,
+ * if it was any other value it wouldn't work as and AND with a 0 is akin to multiplying by 0,
+ * the result remains 0, so this optimization can be applied only with a target 0, if it was any
+ * other value then an and with that value wouldn't guarantee that the value would remain unchanged like a 0/
+ * 
+ * @param v 
+ * @param currentOffset 
+ * @param target 
+ * @return true 
+ * @return false 
+ */
+bool searchEquivalentAnd(Value* v, unsigned currentOffset, int target = 0) {
+    if(target == currentOffset) return true;
+
+    auto* instr = dyn_cast<Instruction>(v);
+    if (!instr || instr->getOpcode() != Instruction::And) return false;
+
+    auto [constant, var] = getConstAndVal(instr, commutativeOps.count(instr->getOpcode()) > 0);
+    if(!constant) return false;
+
+    currentOffset = currentOffset & constant->getZExtValue();
+
+    return searchEquivalentAnd(var, currentOffset);
+}
+
+/**
+ * @brief we check that the previous instruction shares the same opcode and constant,
  * if so we can remove the current instruction and replace any future use with the previous one.
  * this is because any of the three boolean operations below with the same repeated constant keeps
  * yielding the same result: e.g. x & cst & cst & ... & cst == x & cst
+ * 
+ * @param var 
+ * @param cst 
+ * @param opCode 
+ * @return Value* 
  */
 Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     auto* prevInstr = dyn_cast<Instruction>(var);
@@ -662,18 +772,25 @@ Value* searchEquivalentBool(Value* var, ConstantInt* cst, unsigned opCode) {
     else if (opCode == Instruction::And || opCode == Instruction::Or) {
         if (cst->getZExtValue() == prevCst->getZExtValue())
             return var;
+        else if (opCode == Instruction::And)
+            return searchEquivalentAnd(prevVar, cst->getZExtValue() & prevCst->getZExtValue()) ? ConstantInt::get(cst->getType(), 0) : nullptr;
     }
 
     return nullptr;
 }
 
 /**
- * set of commutative instructions
+ * @brief set of commutative instructions
+ * 
  */
 std::set<unsigned> commutativeOps = {Instruction::Add, Instruction::Mul, Instruction::And, Instruction::Or, Instruction::Xor};
 
 /**
- * returns the constant and variable values for the given instruction if present, nullptr otherwise
+ * @brief returns the constant and variable values for the given instruction if present, nullptr otherwise
+ * 
+ * @param instr 
+ * @param commutative 
+ * @return std::pair<ConstantInt*, Value*> 
  */
 std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutative){
     auto op1 = instr->getOperand(0);
@@ -693,11 +810,15 @@ std::pair<ConstantInt*, Value*> getConstAndVal(Instruction* instr, bool commutat
 }
 
 /**
- * iterates through a basic block to analyze each instruction's for exactly two operands.
+ * @brief iterates through a basic block to analyze each instruction's for exactly two operands.
  * it identifies the roles of the variable and constant, computes a baseline offset, and normalizes
  * the sign for subtraction or right-shift operations.
  * dispathced the relevant optimization based on the opcode; if successful, it propagates the new value to
  * replace the old redundant instruction which is then removed 
+ * 
+ * @param B 
+ * @return true 
+ * @return false 
  */
 bool runOnBasicBlock(BasicBlock &B) override {
     bool transformed = false;
