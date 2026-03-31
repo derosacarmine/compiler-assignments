@@ -1,0 +1,77 @@
+% ==========================================
+% SECTION 2: DOMINATOR ANALYSIS
+% ==========================================
+\section{Dominator Analysis}
+
+L'analisi dei Dominatori è fondamentale per la costruzione della Static Single Assignment (SSA) form e per l'individuazione dei loop naturali nel Control Flow Graph. Un nodo $d$ domina un nodo $n$ se ogni percorso dal nodo di ingresso al nodo $n$ deve passare per $d$.
+Spiegazione:
+Forward perché i dominatori di un nodo dipendono da chi lo precede, non da chi lo segue
+Transfer function: un blocco aggiunge sé stesso all'insieme dei dominatori in ingresso
+Boundary: l'Entry domina solo sé stesso all'inizio
+Meet = intersezione: un nodo d domina b solo se domina tutti i predecessori di b
+Initial = AllNodes: iniziamo pessimisticamente (ogni nodo è dominato da tutti), poi l'intersezione raffina
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Dominator Analysis} \\
+\midrule
+\textbf{Domain}                    & Sets of nodes (subsets of all basic blocks) \\
+\textbf{Direction}                 & Forward: $out[b] = f_b(in[b])$,\quad $in[b] = \bigcap_{p \in pred(b)} out[p]$ \\
+\textbf{Transfer Function}         & $out[b] = Gen_b \cup (in[b] \setminus Kill_b)$ \\
+\textbf{Meet Operation ($\wedge$)} & Intersection ($\cap$) \\
+\textbf{Boundary Condition}        & $out[\text{Entry}] = \{\text{Entry}\}$ \\
+\textbf{Initial Interior Points}   & $out[B] = \text{AllNodes}$ (Universal set) \\
+\bottomrule
+\end{tabular}
+\caption{Dominator Analysis as a Dataflow problem }
+\end{table}
+
+Prima aggiungi subito {B} (Gen del nodo stesso)
+Intersechi tutti i predecessori (Meet)
+Ripeti su tutti i BB finché nessun Dom(B) cambia (convergenza)
+
+Si parte dal massimo possibile (AllNodes)
+L'intersezione può solo ridurre gli insiemi, mai aumentarli
+Gli insiemi sono finiti -> si converge in al più |AllNodes| iterazioni
+
+\begin{algorithm}[H]
+\caption{Dominator Analysis}
+\begin{algorithmic}[1]
+
+\State $Dom(\text{Entry}) \gets \{\text{Entry}\}$
+\Comment{Boundary condition}
+
+\For{each basic block $B \neq \text{Entry}$}
+    \State $Dom(B) \gets \text{AllNodes}$
+    \Comment{Pessimistic initialization}
+\EndFor
+
+\State $changed \gets \texttt{true}$
+
+\While{$changed$}
+    \State $changed \gets \texttt{false}$
+    \For{each basic block $B \neq \text{Entry}$}
+        
+        \State $new\_dom \gets \text{AllNodes}$
+        \For{each $P \in pred(B)$}
+            \State $new\_dom \gets new\_dom \cap Dom(P)$
+            \Comment{Meet: intersection of predecessors}
+        \EndFor
+        
+        \State $new\_dom \gets \{B\} \cup new\_dom$
+        \Comment{Transfer function: $Gen_B = \{B\},\ Kill_B = \emptyset$}
+        
+        \If{$new\_dom \neq Dom(B)$}
+            \State $Dom(B) \gets new\_dom$
+            \State $changed \gets \texttt{true}$
+        \EndIf
+        
+    \EndFor
+\EndWhile
+
+\end{algorithmic}
+\end{algorithm}
+
+\vspace{1cm}

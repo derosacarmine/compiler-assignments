@@ -1,0 +1,31 @@
+% ==========================================
+% SECTION 3: CONSTANT PROPAGATION
+% ==========================================
+\section{Constant Propagation}
+
+La Constant Propagation è un'analisi dataflow progettata per determinare quali variabili all'interno di un programma hanno un valore costante in un determinato punto dell'esecuzione, permettendo al compilatore di sostituire la variabile con la costante stessa.
+
+\begin{table}[H] % Cambiato in [H]
+\centering
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Definition} \\
+\midrule
+\textbf{Domain} & Sets of expressions \\
+\textbf{Direction} & Backward: $in[b] = f_b(out[b])$, $out[b] = \wedge in[succ(b)]$ \\
+\textbf{Transfer Function} & $in[b] = Gen_b \cup (out[b] \setminus Kill_b)$ \\
+\textbf{Meet Operation ($\wedge$)} & Intersection ($\cap$) \\
+\textbf{Boundary Condition} & $in[\text{Exit}] = \emptyset$ \\
+\textbf{Initial Interior Points} & $in[B] = S$ (Universal set) \\
+\bottomrule
+\end{tabular}
+\caption{Contant Propagation parameters}
+\end{table}
+
+\begin{algorithm}[h!]
+\caption{Constant Propagation (TBD)}
+\begin{algorithmic}[1]
+\State \Comment{Algoritmo da definire...}
+\end{algorithmic}
+\end{algorithm}

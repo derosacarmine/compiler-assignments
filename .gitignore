@@ -5,3 +5,7 @@ build
 ll
 optimized
 doc
+.aux
+.fdb_latexmk
+.fls
+.log
