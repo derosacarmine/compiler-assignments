@@ -18,7 +18,6 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \textbf{Domain} & Sets of pairs $<variable, value>$\\
 \textbf{Direction} & Forward \\ & $in[B] = \wedge(out[pred(B)])$ \\ & $out[B] = f_B(in(B)]$ \\
 \textbf{Transfer Function} & $f_B(x) = Gen_B \cup (x \setminus Kill_B)$ \\
-%in[b] = Gen_b \cup (out[b] \setminus Kill_b)$ \\
 \textbf{Meet Operation ($\wedge$)} & Intersection ($\cap$) \\
 \textbf{Boundary Condition} & $in[entry] = \emptyset$, $out[entry] = \emptyset$ \\
 \textbf{Initial Interior Points} & $in[B] = U$, $out[B] = \emptyset$ \\
@@ -57,8 +56,39 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \end{algorithmic}
 \end{algorithm}
 
-\begin{figure}[H] % Aggiunto [H] qui per bloccare l'immagine
+\begin{figure}[H]
     \centering
     \includegraphics[width=1.35\linewidth]{CP.pdf}
     \caption{Constant Propagation example CFG}
 \end{figure}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{2.5}
+\makebox[\textwidth][c]{
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Iteration 1}} & \multicolumn{2}{c}{\textbf{Iteration 2}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+\textbf{Basic Block} & \textbf{IN[B]} & \textbf{OUT[B]} & \textbf{IN[B]} & \textbf{OUT[B]} \\
+\midrule
+\textbf{BB1 (Entry)} & \emptyset & \emptyset & \emptyset & \emptyset \\
+\textbf{BB2} & \emptyset & $<k, 2>$ & \emptyset & $<k, 2>$ \\
+\textbf{BB3} & $<k, 2>$ & $<k, 2>$ & $<k, 2>$ & $<k, 2>$ \\
+\textbf{BB4} & $<k, 2>$ & $<k, 2>, <a, 4>$ & $<k, 2>$ & $<k, 2>, <a, 4>$ \\
+\textbf{BB5} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>, <x, 5>$ & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>, <x, 5>$ \\
+\textbf{BB6} & $<k, 2>$ & $<k, 2>, <a, 4>$ & $<k, 2>$ & $<k, 2>, <a, 4>$ \\
+\textbf{BB7} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>, <x, 5>$ & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>, <x, 8>$ \\
+\textbf{BB8} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ \\
+\textbf{BB9} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
+\textbf{BB10} & $<k, 4>, <a, 4>$ & $<k, 4>, <a, 4>, <b, 2>$ & $<a, 4>$ & $<a, 4>, <b, 2>$ \\
+\textbf{BB11} & $<k, 4>, <a, 4>, <b, 2>$ & \makecell{$<k, 4>, <a, 4>,$ \\ $<b, 2>, <x, 8>$} & $<a, 4>, <b, 2>$ & $<a, 4>, <b, 2>$ \\
+\textbf{BB12} & \makecell{$<k, 4>, <a, 4>,$ \\ $<b, 2>, <x, 8>$} & \makecell{$<k, 4>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & $<a, 4>, <b, 2>$ & $<a, 4>, <b, 2>, <y, 8>$ \\
+\textbf{BB13} & \makecell{$<k, 4>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & \makecell{$<k, 5>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & $<a, 4>, <b, 2>, <y, 8>$ & $<a, 4>, <b, 2>, <y, 8>$ \\
+\textbf{BB14} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
+\textbf{BB15} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
+\bottomrule
+\end{tabular}
+}
+\caption{Constant Propagation Algorithm Exectution Table}
+\end{table}
