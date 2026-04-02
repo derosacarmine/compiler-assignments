@@ -16,12 +16,12 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \textbf{Parameter} & \textbf{Definition} \\
 \midrule
 \textbf{Domain} & Sets of pairs $<variable, value>$\\
-\textbf{Direction} & Forward \\ & $in[b] = \wedge(out[pred(b)])$ \\ & $out[b] = f_B(in(b)]$ \\
-\textbf{Transfer Function} & $f_b(x) = Gen_b \cup (x \setminus Kill_b)$ \\
+\textbf{Direction} & Forward \\ & $in[B] = \wedge(out[pred(B)])$ \\ & $out[B] = f_B(in(B)]$ \\
+\textbf{Transfer Function} & $f_B(x) = Gen_B \cup (x \setminus Kill_B)$ \\
 %in[b] = Gen_b \cup (out[b] \setminus Kill_b)$ \\
 \textbf{Meet Operation ($\wedge$)} & Intersection ($\cap$) \\
 \textbf{Boundary Condition} & $in[entry] = \emptyset$, $out[entry] = \emptyset$ \\
-\textbf{Initial Interior Points} & $in[b] = U$, $out[b] = \emptyset$ \\
+\textbf{Initial Interior Points} & $in[B] = U$, $out[B] = \emptyset$ \\
 \bottomrule
 \end{tabular}
 \caption{Contant Propagation parameters}
@@ -30,13 +30,13 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \begin{algorithm}[H]
 \caption{Constant Propagation (TBD)}
 \begin{algorithmic}[1]
-\State // \textit{Boundary condition: Parameters are NAC ($\perp$)}
-\State $out[\text{Entry}] \gets \{v \to \perp \mid v \in \text{Parameters}\}$
-\State $out[\text{Entry}] \gets out[\text{Entry}] \cup \{v \to \top \mid v \notin \text{Parameters}\}$
-\Statex
+\State $in[\text{Entry}] \gets \emptyset$
+\State $out[\text{Entry}] \gets \emptyset$
 \State // \textit{Initialization: All other blocks start as Undefined ($\top$)}
+\Statex
 \For{\textbf{each} basic block $B \neq \text{Entry}$}
-    \State $out[B] \gets \{v \to \top \mid v \in \text{Variables}\}$
+    \State $in[B] \gets U$
+    \State $out[B] \gets \emptyset$
 \EndFor
 \Statex
 \State $changes \gets \text{true}$
@@ -44,7 +44,7 @@ binary expressions whose operands are known constants, thereby optimizing execut
     \State $changes \gets \text{false}$
     \For{\textbf{each} basic block $B \neq \text{Entry}$}
         \State // \textit{Meet operation: combine constants from all predecessors}
-        \State $in[B] \gets \bigwedge_{p \in pred(B)} out[p]$
+        \State $in[B] \gets \bigcap_{p \in pred(B)} out[p]$
         \Statex
         \State // \textit{Transfer function: apply constant folding}
         \State $out_{new} \gets f_B(in[B])$
