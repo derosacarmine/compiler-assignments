@@ -18,7 +18,7 @@ To identify them, we proceed backward, starting from the \textit{Exit} basic blo
 \textbf{Transfer Function} & $in[b] = Gen_b \cup (out[b] \setminus Kill_b)$ \\
 \textbf{Meet Operation ($\wedge$)} & Intersection ($\cap$) \\
 \textbf{Boundary Condition} & $in[\text{Exit}] = \emptyset$ \\
-\textbf{Initial Interior Points} & $in[B] = S$ (Universal set) \\
+\textbf{Initial Interior Points} & $in[B] = U$ (Universal set) \\
 \bottomrule
 \end{tabular}
 \caption{Very Busy Expressions parameters}
@@ -29,7 +29,7 @@ To identify them, we proceed backward, starting from the \textit{Exit} basic blo
 \begin{algorithmic}[1]
 \State $in[\text{Exit}] \gets \emptyset$
 \For{\textbf{each} basic block $B \neq \text{Exit}$}
-    \State $in[B] \gets S$
+    \State $in[B] \gets U$
 \EndFor
 \Statex
 \State $changes \gets \text{true}$
@@ -74,5 +74,5 @@ To identify them, we proceed backward, starting from the \textit{Exit} basic blo
 \textbf{BB8 (Exit)} & $\emptyset$ & & $\emptyset$ & \\
 \bottomrule
 \end{tabular}
-\caption{Iteration table for example CFG (we iterate on BB in decreasing order)}
+\caption{Iteration table for example CFG (we iterate on BBs in decreasing order)}
 \end{table}
