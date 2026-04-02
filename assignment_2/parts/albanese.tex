@@ -27,9 +27,39 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \caption{Contant Propagation parameters}
 \end{table}
 
-\begin{algorithm}[h!]
+\begin{algorithm}[H]
 \caption{Constant Propagation (TBD)}
 \begin{algorithmic}[1]
-\State \Comment{Algoritmo da definire...}
+\State // \textit{Boundary condition: Parameters are NAC ($\perp$)}
+\State $out[\text{Entry}] \gets \{v \to \perp \mid v \in \text{Parameters}\}$
+\State $out[\text{Entry}] \gets out[\text{Entry}] \cup \{v \to \top \mid v \notin \text{Parameters}\}$
+\Statex
+\State // \textit{Initialization: All other blocks start as Undefined ($\top$)}
+\For{\textbf{each} basic block $B \neq \text{Entry}$}
+    \State $out[B] \gets \{v \to \top \mid v \in \text{Variables}\}$
+\EndFor
+\Statex
+\State $changes \gets \text{true}$
+\While{$changes$}
+    \State $changes \gets \text{false}$
+    \For{\textbf{each} basic block $B \neq \text{Entry}$}
+        \State // \textit{Meet operation: combine constants from all predecessors}
+        \State $in[B] \gets \bigwedge_{p \in pred(B)} out[p]$
+        \Statex
+        \State // \textit{Transfer function: apply constant folding}
+        \State $out_{new} \gets f_B(in[B])$
+        \Statex
+        \If{$out[B] \neq out_{new}$}
+            \State $out[B] \gets out_{new}$
+            \State $changes \gets \text{true}$
+        \EndIf
+    \EndFor
+\EndWhile
 \end{algorithmic}
 \end{algorithm}
+
+\begin{figure}[H] % Aggiunto [H] qui per bloccare l'immagine
+    \centering
+    \includegraphics[width=1.35\linewidth]{CP.pdf}
+    \caption{Constant Propagation example CFG}
+\end{figure}
