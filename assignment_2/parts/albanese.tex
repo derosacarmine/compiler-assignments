@@ -28,11 +28,10 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \end{table}
 
 \begin{algorithm}[H]
-\caption{Constant Propagation (TBD)}
+\caption{Constant Propagation}
 \begin{algorithmic}[1]
 \State $in[\text{Entry}] \gets \emptyset$
 \State $out[\text{Entry}] \gets \emptyset$
-\State // \textit{Initialization: All other blocks start as Undefined ($\top$)}
 \Statex
 \For{\textbf{each} basic block $B \neq \text{Entry}$}
     \State $in[B] \gets U$
