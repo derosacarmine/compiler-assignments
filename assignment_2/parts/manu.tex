@@ -59,3 +59,53 @@ Gli insiemi sono finiti -> si converge in al più |AllNodes| iterazioni
 \end{algorithmic}
 \end{algorithm}
 \vspace{1cm}
+
+
+
+Iteraction 1:
+Stato iniziale:
+
+OUT[A] = {A} <-  boundary condition
+Others = U = {A,B,C,D,E,F,G}
+
+IN[B] = OUT[A] = {A} -> OUT[B] = {A} Union {B} = {A,B}
+IN[C] = OUT[A] = {A} -> OUT[C] = {A} Union {C} = {A,C}
+IN[D] = OUT[C] = {A,C} -> OUT[D] = {A,C} Union {D} = {A,C,D}
+IN[E] = OUT[C] = {A,C} -> OUT[E] = {A,C} Union {E} = {A,C,E}
+IN[F] = OUT[D] Intersect OUT[E] = {A,C,D} Intersect {A,C,E} = {A,C} -> OUT[F] = {A,C} Union {F} = {A,C,F}
+IN[G] = OUT[B] Intersect OUT[F] = {A,B} Intersect {A,C,F} = {A} -> OUT[G] = {A} Union {G} = {A,G}
+
+Iteraction 2:
+Ricalcolo tutto e ottengo gli stessi identici valori -> nessun cambiamento -> fine
+
+\textbf{Stato iniziale:} $OUT[A] = \{A\}$;\quad $OUT[B] = OUT[C] = \cdots = OUT[G] = U$.
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.6}
+\begin{tabular}{l cc cc}
+\toprule
+ & \multicolumn{2}{c}{\textbf{Iteration 1}}
+ & \multicolumn{2}{c}{\textbf{Iteration 2}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Block} & \textbf{IN[B]} & \textbf{OUT[B]}
+               & \textbf{IN[B]} & \textbf{OUT[B]} \\
+\midrule
+\textbf{A (Entry)}
+    & ---           & $\{A\}$       & ---           & $\{A\}$ \\
+\textbf{B}
+    & $\{A\}$       & $\{A,B\}$     & $\{A\}$       & $\{A,B\}$ \\
+\textbf{C}
+    & $\{A\}$       & $\{A,C\}$     & $\{A\}$       & $\{A,C\}$ \\
+\textbf{D}
+    & $\{A,C\}$     & $\{A,C,D\}$   & $\{A,C\}$     & $\{A,C,D\}$ \\
+\textbf{E}
+    & $\{A,C\}$     & $\{A,C,E\}$   & $\{A,C\}$     & $\{A,C,E\}$ \\
+\textbf{F}
+    & $\{A,C\}$     & $\{A,C,F\}$   & $\{A,C\}$     & $\{A,C,F\}$ \\
+\textbf{G}
+    & $\{A\}$       & $\{A,G\}$     & $\{A\}$       & $\{A,G\}$ \\
+\bottomrule
+\end{tabular}
+\caption{Iteration table for Dominator Analysis on the example CFG.}
+\end{table}
