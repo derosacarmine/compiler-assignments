@@ -9,3 +9,4 @@ doc
 *.fdb_latexmk
 *.fls
 *.log
+*.Identifier

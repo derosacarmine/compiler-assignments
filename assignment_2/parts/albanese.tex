@@ -58,7 +58,7 @@ binary expressions whose operands are known constants, thereby optimizing execut
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=1.35\linewidth]{CP.pdf}
+    \includegraphics[width=0.8\linewidth]{graphs/CP.pdf}
     \caption{Constant Propagation example CFG}
 \end{figure}
 
@@ -86,9 +86,11 @@ binary expressions whose operands are known constants, thereby optimizing execut
 \textbf{BB12} & \makecell{$<k, 4>, <a, 4>,$ \\ $<b, 2>, <x, 8>$} & \makecell{$<k, 4>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & $<a, 4>, <b, 2>$ & $<a, 4>, <b, 2>, <y, 8>$ \\
 \textbf{BB13} & \makecell{$<k, 4>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & \makecell{$<k, 5>, <a, 4>, <b, 2>,$ \\ $<x, 8>, <y, 8>$} & $<a, 4>, <b, 2>, <y, 8>$ & $<a, 4>, <b, 2>, <y, 8>$ \\
 \textbf{BB14} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
-\textbf{BB15} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
+\textbf{BB15 (Exit)} & $<k, 2>, <a, 4>$ & $<k, 2>, <a, 4>$ & $<a, 4>$ & $<a, 4>$ \\
 \bottomrule
 \end{tabular}
 }
-\caption{Constant Propagation Algorithm Execution Table}
+\captionsetup{justification=centering} % Forza il centraggio di tutte le righe
+\caption{Constant Propagation Algorithm Execution Table\\[1.5ex] 
+The third iteration is equal to the second one so we omitted it.}
 \end{table}

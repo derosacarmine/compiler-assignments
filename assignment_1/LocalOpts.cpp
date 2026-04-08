@@ -35,7 +35,7 @@ struct Common {
      * @return true 
      * @return false 
      */
-    virtual bool runOnBasicBlock(BasicBlock &B) = 0;
+    virtual bool runOnBasicBlock(BasicBlock &B) = 0; // forces to implement method in subclasses
     
     /**
      * @brief the starting point, it calls runOnFunction with the given function,
@@ -53,7 +53,7 @@ struct Common {
     }
 
   /**
-   * @brief for each basic block of the fz it calls runOnBasickBlock
+   * @brief for each basic block of the fz it calls runOnBasicBlock
    * 
    * @param F 
    * @return true 
@@ -112,10 +112,10 @@ std::function<Value*(Value* op1, Value* op2)> ifOpsEqualReturnOp1 = [](Value* op
 using Fn = std::function<Value*(ConstantInt*, Value*)>;
     
     /**
-     * @brief 
+     * @brief creates a lambda function that iterates on a vector of functions until it finds an applicable one
      * 
-     * @param fns 
-     * @return Fn 
+     * @param fns vector of functions
+     * @return Fn the function that iterates on the vector of functions
      */
     static Fn firstOf(std::vector<Fn> fns) {
         return [fns](ConstantInt* c, Value* v) -> Value* {

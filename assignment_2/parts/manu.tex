@@ -2,14 +2,7 @@
 % SECTION 2: DOMINATOR ANALYSIS
 % ==========================================
 \section{Dominator Analysis}
-
-L'analisi dei Dominatori è fondamentale per la costruzione della Static Single Assignment (SSA) form e per l'individuazione dei loop naturali nel Control Flow Graph. Un nodo $d$ domina un nodo $n$ se ogni percorso dal nodo di ingresso al nodo $n$ deve passare per $d$.
-Spiegazione:
-Forward perché i dominatori di un nodo dipendono da chi lo precede, non da chi lo segue
-Transfer function: un blocco aggiunge sé stesso all'insieme dei dominatori in ingresso
-Boundary: l'Entry domina solo sé stesso all'inizio
-Meet = intersezione: un nodo d domina b solo se domina tutti i predecessori di b
-Initial = U: iniziamo pessimisticamente (ogni nodo è dominato da tutti), poi l'intersezione raffina
+Dominator analysis if essential for building the Static Single Assignment (SSA) form and for finding natural loops in the Control Flow Graph (CFG). A node $d$ dominates a node $n$ if each path from the entry node to $n$ passes through $d$.
 \begin{table}[H]
 \centering
 \renewcommand{\arraystretch}{1.5}
@@ -27,14 +20,6 @@ Initial = U: iniziamo pessimisticamente (ogni nodo è dominato da tutti), poi l'
 \end{tabular}
 \caption{Dominator Analysis as a Dataflow problem }
 \end{table}
-
-Prima aggiungi subito {B} (Gen del nodo stesso)
-Intersechi tutti i predecessori (Meet)
-Ripeti su tutti i BB finché nessun Dom(B) cambia (convergenza)
-
-Si parte dal massimo possibile (AllNodes)
-L'intersezione può solo ridurre gli insiemi, mai aumentarli
-Gli insiemi sono finiti -> si converge in al più |AllNodes| iterazioni
 
 \begin{algorithm}[H]
 \caption{Dominator Analysis Algorithm}
@@ -58,31 +43,14 @@ Gli insiemi sono finiti -> si converge in al più |AllNodes| iterazioni
 \EndWhile
 \end{algorithmic}
 \end{algorithm}
+
 \vspace{1cm}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=1.0\linewidth]{dominator_analysis_example.pdf}
+    \includegraphics[width=1.0\linewidth]{graphs/dominator_analysis_example.pdf}
     \caption{Dominator analysis example CFG}
 \end{figure}
-
-Iteraction 1:
-Stato iniziale:
-
-OUT[A] = {A} <-  boundary condition
-Others = U = {A,B,C,D,E,F,G}
-
-IN[B] = OUT[A] = {A} -> OUT[B] = {A} Union {B} = {A,B}
-IN[C] = OUT[A] = {A} -> OUT[C] = {A} Union {C} = {A,C}
-IN[D] = OUT[C] = {A,C} -> OUT[D] = {A,C} Union {D} = {A,C,D}
-IN[E] = OUT[C] = {A,C} -> OUT[E] = {A,C} Union {E} = {A,C,E}
-IN[F] = OUT[D] Intersect OUT[E] = {A,C,D} Intersect {A,C,E} = {A,C} -> OUT[F] = {A,C} Union {F} = {A,C,F}
-IN[G] = OUT[B] Intersect OUT[F] = {A,B} Intersect {A,C,F} = {A} -> OUT[G] = {A} Union {G} = {A,G}
-
-Iteraction 2:
-Ricalcolo tutto e ottengo gli stessi identici valori -> nessun cambiamento -> fine
-
-\textbf{Stato iniziale:} $OUT[A] = \{A\}$;\quad $OUT[B] = OUT[C] = \cdots = OUT[G] = U$.
 
 \begin{table}[H]
 \centering
