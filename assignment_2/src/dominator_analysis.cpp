@@ -94,4 +94,26 @@ public:
 
         return PreservedAnalyses::all();
     }
+
+    
 };
+
+llvm::PassPluginLibraryInfo getDominatorAnalysisPluginInfo() {
+    return {LLVM_PLUGIN_API_VERSION, "DominatorAnalysis", LLVM_VERSION_STRING,
+            [](PassBuilder &PB) {
+                PB.registerPipelineParsingCallback(
+                    [](StringRef Name, FunctionPassManager &FPM,
+                    ArrayRef<PassBuilder::PipelineElement>) {
+                    if (Name == "dominator-analysis") {
+                        FPM.addPass(CustomDominatorAnalysis());
+                        return true;
+                    }
+                    return false;
+                    });
+            }};
+    }
+
+    extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+    llvmGetPassPluginInfo() {
+    return getDominatorAnalysisPluginInfo();
+    }

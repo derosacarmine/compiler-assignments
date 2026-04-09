@@ -44,21 +44,29 @@ public:
         // 1. Pre-calcolo di Gen e Kill
         // Gen[B]: espressioni calcolate in B prima che i loro operandi siano ridefiniti.
         // KillVars[B]: variabili (Value*) scritte in B che invalidano espressioni.
-        for (BasicBlock &BB : F) {
-            for (Instruction &I : BB) {
-                if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
-                    Expression expr = {BinOp->getOpcode(), BinOp->getOperand(0), BinOp->getOperand(1)};
-                    // Se gli operandi non sono stati ancora "uccisi" in questo blocco, aggiungi a Gen
-                    if (KillVars[&BB].find(expr.lhs) == KillVars[&BB].end() &&
-                        KillVars[&BB].find(expr.rhs) == KillVars[&BB].end()) {
+       for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+            if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
+                Value *lhsPtr = nullptr, *rhsPtr = nullptr;
+
+                if (auto *LLoad = dyn_cast<LoadInst>(BinOp->getOperand(0)))
+                    lhsPtr = LLoad->getPointerOperand();
+                if (auto *RLoad = dyn_cast<LoadInst>(BinOp->getOperand(1)))
+                    rhsPtr = RLoad->getPointerOperand();
+
+                if (lhsPtr && rhsPtr) {
+                    Expression expr = {BinOp->getOpcode(), lhsPtr, rhsPtr};
+                    if (KillVars[&BB].find(lhsPtr) == KillVars[&BB].end() &&
+                        KillVars[&BB].find(rhsPtr) == KillVars[&BB].end()) {
                         Gen[&BB].insert(expr);
                     }
                 }
-                // Ogni istruzione che scrive in un registro virtuale "uccide" quel valore
-                KillVars[&BB].insert(&I);
+            }
+            if (auto *Store = dyn_cast<StoreInst>(&I)) {
+                KillVars[&BB].insert(Store->getPointerOperand());
             }
         }
-
+    }
         // 2. Inizializzazione (Boundary e Interior Points)
         ExpressionSet UniversalSet;
         for (auto &BB : F) {
@@ -103,7 +111,7 @@ public:
                 // Transfer Function: In[B] = Gen[B] U (Out[B] - Kill[B])
                 ExpressionSet currentIn = Gen[&BB];
                 for (const auto &expr : Out[&BB]) {
-                    // Un'espressione sopravvive se nessuno dei suoi operandi è in KillVars[B]
+                    // Un'espressione sopravvive se nessuno dei suoi operandi è in KillVars[B] -> controlla se i puntatori sorgente degli operandi sono stati storati
                     if (KillVars[&BB].find(expr.lhs) == KillVars[&BB].end() &&
                         KillVars[&BB].find(expr.rhs) == KillVars[&BB].end()) {
                         currentIn.insert(expr);
@@ -122,14 +130,50 @@ public:
         return PreservedAnalyses::all();
     }
 
+ 
+
 private:
-    void printResults(Function &F, std::map<BasicBlock*, ExpressionSet> &In, std::map<BasicBlock*, ExpressionSet> &Out) {
-        errs() << "--- Very Busy Expressions Analysis: " << F.getName() << " ---\n";
-        for (BasicBlock &BB : F) {
-            errs() << "BB " << BB.getName() << ":\n";
-            errs() << "  IN:  "; for (auto &e : In[&BB]) errs() << "[" << e.opcode << "] ";
-            errs() << "\n  OUT: "; for (auto &e : Out[&BB]) errs() << "[" << e.opcode << "] ";
-            errs() << "\n";
+   void printResults(Function &F, std::map<BasicBlock*, ExpressionSet> &In, std::map<BasicBlock*, ExpressionSet> &Out) {
+    errs() << "--- Very Busy Expressions Analysis: " << F.getName() << " ---\n";
+    for (BasicBlock &BB : F) {
+        errs() << "BB " << BB.getName() << ":\n";
+        errs() << "  IN:  ";
+        for (auto &e : In[&BB]) {
+            errs() << "(";
+            e.lhs->printAsOperand(errs(), false);
+            errs() << " " << Instruction::getOpcodeName(e.opcode) << " ";
+            e.rhs->printAsOperand(errs(), false);
+            errs() << ") ";
         }
+        errs() << "\n  OUT: ";
+        for (auto &e : Out[&BB]) {
+            errs() << "(";
+            e.lhs->printAsOperand(errs(), false);
+            errs() << " " << Instruction::getOpcodeName(e.opcode) << " ";
+            e.rhs->printAsOperand(errs(), false);
+            errs() << ") ";
+        }
+        errs() << "\n";
     }
+}
 };
+
+   llvm::PassPluginLibraryInfo getVeryBusyExpressionsPluginInfo() {
+    return {LLVM_PLUGIN_API_VERSION, "VeryBusyExpressions", LLVM_VERSION_STRING,
+            [](PassBuilder &PB) {
+                PB.registerPipelineParsingCallback(
+                    [](StringRef Name, FunctionPassManager &FPM,
+                    ArrayRef<PassBuilder::PipelineElement>) {
+                    if (Name == "very-busy-expressions") {
+                        FPM.addPass(VeryBusyExpressions());
+                        return true;
+                    }
+                    return false;
+                    });
+            }};
+    }
+
+    extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+    llvmGetPassPluginInfo() {
+    return getVeryBusyExpressionsPluginInfo();
+    }

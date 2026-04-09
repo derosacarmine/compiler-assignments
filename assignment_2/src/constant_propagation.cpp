@@ -115,6 +115,8 @@ public:
         return PreservedAnalyses::all();
     }
 
+   
+
 private:
     void printTable(Function &F, std::map<BasicBlock*, ConstantEnv> &In, std::map<BasicBlock*, ConstantEnv> &Out) {
         errs() << "\nConstant Propagation Table:\n";
@@ -128,10 +130,33 @@ private:
     }
 
     void dumpEnv(ConstantEnv &E) {
-        if (E.empty()) { errs() << "empty\n"; return; }
-        for (auto const& [var, val] : E) {
-            errs() << "<" << var->getName() << ", " << val->getValue() << "> ";
-        }
-        errs() << "\n";
+    if (E.empty()) { errs() << "empty\n"; return; }
+    for (auto const& [var, val] : E) {
+        errs() << "<";
+        // Usa printAsOperand per stampare il nome/riferimento SSA
+        var->printAsOperand(errs(), false);
+        errs() << ", " << val->getValue() << "> ";
     }
+    errs() << "\n";
+}
 };
+
+ llvm::PassPluginLibraryInfo getConstantPropagationPluginInfo() {
+    return {LLVM_PLUGIN_API_VERSION, "ConstantPropagation", LLVM_VERSION_STRING,
+            [](PassBuilder &PB) {
+                PB.registerPipelineParsingCallback(
+                    [](StringRef Name, FunctionPassManager &FPM,
+                    ArrayRef<PassBuilder::PipelineElement>) {
+                    if (Name == "constant-propagation") {
+                        FPM.addPass(ExplicitConstantPropagation());
+                        return true;
+                    }
+                    return false;
+                    });
+            }};
+    }
+
+    extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+    llvmGetPassPluginInfo() {
+    return getConstantPropagationPluginInfo();
+    }
