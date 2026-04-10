@@ -36,7 +36,7 @@ void test_dominator(int cond, int n) {
     std::printf("sum=%d\n", sum);
 }
 
-int main(int argc, char** argv) {
-    test_dominator(argc - 1, 5);
-    return 0;
-}
+// int main(int argc, char** argv) {
+//     test_dominator(argc - 1, 5);
+//     return 0;
+// }

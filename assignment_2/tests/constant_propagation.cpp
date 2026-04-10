@@ -47,8 +47,8 @@ void test_constant_propagation(int cond) {
     std::printf("Risultati: k=%d, a=%d, x=%d, y=%d\n", k, a, x, y);
 }
 
-int main(int argc, char** argv) {
-    int input = (argc > 1) ? 1 : 0;
-    test_constant_propagation(input);
-    return 0;
-}
+// int main(int argc, char** argv) {
+//     int input = (argc > 1) ? 1 : 0;
+//     test_constant_propagation(input);
+//     return 0;
+// }

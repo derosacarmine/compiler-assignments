@@ -110,8 +110,8 @@ for key in "${!PLUGIN_MAP[@]}"; do
 done
 
 LL_DIR="$TEST_DIR/ll"
-OPT_DIR="$TEST_DIR/optimized"
-mkdir -p "$LL_DIR" "$OPT_DIR"
+# OPT_DIR="$TEST_DIR/optimized"
+# mkdir -p "$LL_DIR" "$OPT_DIR"
 
 echo "Plugin caricati:"
 for key in "${!PLUGIN_MAP[@]}"; do
@@ -134,18 +134,18 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
 
     echo "Processing: $filename  (pass: $pass)"
     
-    if !  clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone -fno-discard-value-names -g "$cpp_file" -o "$LL_DIR/$filename.ll"; then
+    if !  clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone -fno-discard-value-names "$cpp_file" -o "$LL_DIR/$filename.ll"; then
         echo "   [ERROR] Compilazione fallita per: $filename"
         continue
     fi
 
     # mem2reg per promuovere allocas
-    #opt -load-pass-plugin "$plugin" -passes="mem2reg" \
-    #    "$LL_DIR/$filename.ll" -S -o "$LL_DIR/$filename.ll"
+    opt -load-pass-plugin "$plugin" -passes="mem2reg" \
+       "$LL_DIR/$filename.ll" -S -o "$LL_DIR/$filename.ll"
 
     # Esecuzione della pass specifica
     opt -load-pass-plugin "$plugin" -passes="$pass" \
-        "$LL_DIR/$filename.ll" -S -o "$OPT_DIR/${filename}_opt.ll"
+        "$LL_DIR/$filename.ll" -S -disable-output
 
-    echo "   [OK] Completato -> $OPT_DIR/${filename}_opt.ll"
+    #echo "   [OK] Completato -> $OPT_DIR/${filename}_opt.ll"
 done

@@ -32,7 +32,7 @@ void test_very_busy(int cond, int a, int b) {
     }
 }
 
-int main(int argc, char** argv) {
-    test_very_busy(argc - 1, 10, 3);
-    return 0;
-}
+// int main(int argc, char** argv) {
+//     test_very_busy(argc - 1, 10, 3);
+//     return 0;
+// }

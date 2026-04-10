@@ -25,88 +25,134 @@ class ExplicitConstantPropagation : public PassInfoMixin<ExplicitConstantPropaga
 public:
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
         std::map<BasicBlock*, ConstantEnv> In, Out;
-        std::map<BasicBlock*, ConstantEnv> Gen;
-        std::map<BasicBlock*, std::set<Value*>> Kill;
+        std::set<BasicBlock*> visited; // Fondamentale per evitare il bug dell'intersezione con blocchi non visitati
 
-        // --- FASE 1: Calcolo statico di Gen[B] e Kill[B] ---
-        for (BasicBlock &BB : F) {
-            for (Instruction &I : BB) {
-                if (auto *Store = dyn_cast<StoreInst>(&I)) {
-                    Value *Var = Store->getPointerOperand();
-                    Value *Val = Store->getValueOperand();
-
-                    if (auto *CI = dyn_cast<ConstantInt>(Val)) {
-                        // Se è una costante: Gen[B] = Gen[B] U {<Var, Val>}
-                        Gen[&BB][Var] = CI;
-                    } else {
-                        // Se non è costante, rimuovila da Gen se c'era prima (shadowing)
-                        Gen[&BB].erase(Var);
-                    }
-                    // Ogni store "uccide" le definizioni precedenti della variabile
-                    Kill[&BB].insert(Var);
-                }
-            }
-        }
-
-        // --- FASE 2: Inizializzazione ---
-        // In[Entry] = Out[Entry] = empty
         BasicBlock *Entry = &F.getEntryBlock();
-        In[Entry] = {};
-        Out[Entry] = Gen[Entry]; // f_Entry({}) = Gen_Entry
 
-        // Inizializzazione punti interni: In[B] = U (Set Universale)
-        // In questo contesto, U è rappresentato da un set che contiene tutte le variabili
-        // possibili con un valore speciale "Unknown". Per semplicità, gestiamo l'intersezione.
-        for (BasicBlock &BB : F) {
-            if (&BB == Entry) continue;
-            Out[&BB] = {}; 
-        }
-
-        // --- FASE 3: Iterazione del Punto Fisso ---
         bool changes = true;
         while (changes) {
             changes = false;
 
             for (BasicBlock &BB : F) {
-                if (&BB == Entry) continue;
-
-                // Meet Operation: In[B] = Intersection of Out[Preds]
                 ConstantEnv currentIn;
-                bool first = true;
-                for (BasicBlock *P : predecessors(&BB)) {
-                    if (first) {
-                        currentIn = Out[P];
-                        first = false;
-                    } else {
-                        // Intersezione rigorosa: <var, val> deve essere identico in tutti i pred
-                        for (auto it = currentIn.begin(); it != currentIn.end(); ) {
-                            if (Out[P].find(it->first) == Out[P].end() || 
-                                Out[P].at(it->first) != it->second) {
-                                it = currentIn.erase(it);
-                            } else {
-                                ++it;
+
+                // --- MEET OPERATION ---
+                if (&BB != Entry) {
+                    bool first = true;
+                    for (BasicBlock *P : predecessors(&BB)) {
+                        // TRUCCO VITALE: Ignoriamo i predecessori non ancora calcolati.
+                        // Questo simula l'inizializzazione al set "Universale" o "Top".
+                        if (visited.find(P) == visited.end()) continue;
+
+                        if (first) {
+                            currentIn = Out[P];
+                            first = false;
+                        } else {
+                            // Intersezione: tieni la variabile solo se esiste in entrambi con lo STESSO valore
+                            for (auto it = currentIn.begin(); it != currentIn.end(); ) {
+                                if (Out[P].find(it->first) == Out[P].end() || 
+                                    Out[P].at(it->first)->getValue() != it->second->getValue()) {
+                                    it = currentIn.erase(it);
+                                } else {
+                                    ++it;
+                                }
                             }
                         }
                     }
                 }
                 In[&BB] = currentIn;
 
-                // Transfer Function: Out[B] = Gen[B] U (In[B] - Kill[B])
-                ConstantEnv currentOut = Gen[&BB]; // Gen_B
-                for (auto const& [var, val] : In[&BB]) {
-                    // Se la variabile non è in Kill[B], sopravvive
-                    if (Kill[&BB].find(var) == Kill[&BB].end()) {
-                        // Gen ha la precedenza se la stessa variabile fosse in entrambi
-                        if (currentOut.find(var) == currentOut.end()) {
-                            currentOut[var] = val;
+                // --- TRANSFER FUNCTION ---
+                // In SSA non c'è Kill. Tutto ciò che entra, esce (OUT parte identico a IN).
+                ConstantEnv currentOut = currentIn; 
+                
+                for (Instruction &I : BB) {
+                    // 1. Valutazione Matematica (Add, Sub, Mul, SDiv)
+                    if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
+                        Value *op1 = BinOp->getOperand(0);
+                        Value *op2 = BinOp->getOperand(1);
+
+                        ConstantInt *c1 = dyn_cast<ConstantInt>(op1);
+                        if (!c1 && currentOut.count(op1)) c1 = currentOut[op1];
+
+                        ConstantInt *c2 = dyn_cast<ConstantInt>(op2);
+                        if (!c2 && currentOut.count(op2)) c2 = currentOut[op2];
+
+                        if (c1 && c2) {
+                            if (BinOp->getOpcode() == Instruction::Add) {
+                                currentOut[&I] = ConstantInt::get(I.getContext(), c1->getValue() + c2->getValue());
+                            } else if (BinOp->getOpcode() == Instruction::Sub) {
+                                currentOut[&I] = ConstantInt::get(I.getContext(), c1->getValue() - c2->getValue());
+                            } else if (BinOp->getOpcode() == Instruction::Mul) {
+                                // AGGIUNTO: Supporto per la moltiplicazione!
+                                currentOut[&I] = ConstantInt::get(I.getContext(), c1->getValue() * c2->getValue());
+                            } else if (BinOp->getOpcode() == Instruction::SDiv) {
+                                // AGGIUNTO: Divisione con controllo per evitare crash (divisione per zero)
+                                if (c2->getValue() != 0) {
+                                    currentOut[&I] = ConstantInt::get(I.getContext(), c1->getValue().sdiv(c2->getValue()));
+                                }
+                            }
+                        }
+                    }
+                    // 1.5 Valutazione delle Comparazioni (es. icmp eq i32 4, 4)
+                    else if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
+                        Value *op1 = Cmp->getOperand(0);
+                        Value *op2 = Cmp->getOperand(1);
+
+                        ConstantInt *c1 = dyn_cast<ConstantInt>(op1);
+                        if (!c1 && currentOut.count(op1)) c1 = currentOut[op1];
+
+                        ConstantInt *c2 = dyn_cast<ConstantInt>(op2);
+                        if (!c2 && currentOut.count(op2)) c2 = currentOut[op2];
+
+                        if (c1 && c2) {
+                            bool isTrue = false;
+                            switch (Cmp->getPredicate()) {
+                                case CmpInst::ICMP_EQ:  isTrue = (c1->getValue() == c2->getValue()); break;
+                                case CmpInst::ICMP_NE:  isTrue = (c1->getValue() != c2->getValue()); break;
+                                case CmpInst::ICMP_SGT: isTrue = (c1->getValue().sgt(c2->getValue())); break;
+                                case CmpInst::ICMP_SLT: isTrue = (c1->getValue().slt(c2->getValue())); break;
+                                default: break; 
+                            }
+                            // i1 è il tipo booleano in LLVM (intero a 1 bit)
+                            currentOut[&I] = ConstantInt::get(Type::getInt1Ty(I.getContext()), isTrue);
+                        }
+                    }
+                    // 2. Valutazione dei Nodi PHI
+                    else if (auto *Phi = dyn_cast<PHINode>(&I)) {
+                        ConstantInt *commonConst = nullptr;
+                        bool isConstant = true;
+                        
+                        for (Value *incVal : Phi->incoming_values()) {
+                            ConstantInt *c = dyn_cast<ConstantInt>(incVal);
+                            if (!c && currentOut.count(incVal)) c = currentOut[incVal];
+                            
+                            if (!c) { 
+                                isConstant = false; 
+                                break; 
+                            }
+                            
+                            if (!commonConst) {
+                                commonConst = c;
+                            } else if (commonConst->getValue() != c->getValue()) { 
+                                isConstant = false; 
+                                break; 
+                            }
+                        }
+                        
+                        if (isConstant && commonConst) {
+                            currentOut[&I] = commonConst;
                         }
                     }
                 }
 
+                // Controllo di convergenza
                 if (currentOut != Out[&BB]) {
                     Out[&BB] = std::move(currentOut);
                     changes = true;
                 }
+                
+                visited.insert(&BB);
             }
         }
 
