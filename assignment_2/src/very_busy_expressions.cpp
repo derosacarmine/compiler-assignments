@@ -37,45 +37,49 @@ using ExpressionSet = std::set<Expression>;
 class VeryBusyExpressions : public PassInfoMixin<VeryBusyExpressions> {
 public:
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-        std::map<BasicBlock*, ExpressionSet> In, Out, Gen;
+        std::map<BasicBlock*, ExpressionSet> In, Out;
+        std::map<BasicBlock*, ExpressionSet> Gen;
+        std::map<BasicBlock*, std::set<Value*>> KillVars;
 
-        // HELPER: Controlla se un Value (operando) è stato definito (creato) in questo blocco.
-        // In SSA, un'istruzione coincide con il valore che produce.
-        auto isDefinedIn = [](Value *V, BasicBlock *BB) {
-            if (auto *Inst = dyn_cast<Instruction>(V)) {
-                return Inst->getParent() == BB;
-            }
-            return false; // Parametri della funzione (%a, %b) o Costanti (5) non sono definiti in nessun blocco
-        };
+        // 1. Pre-calcolo di Gen e Kill
+        // Gen[B]: espressioni calcolate in B prima che i loro operandi siano ridefiniti.
+        // KillVars[B]: variabili (Value*) scritte in B che invalidano espressioni.
+       for (BasicBlock &BB : F) {
+        for (Instruction &I : BB) {
+            if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
+                Value *lhsPtr = nullptr, *rhsPtr = nullptr;
 
-        // 1. Pre-calcolo dell'Universal Set (tutte le espressioni del programma)
-        ExpressionSet UniversalSet;
-        for (BasicBlock &BB : F) {
-            for (Instruction &I : BB) {
-                if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
-                    UniversalSet.insert({BinOp->getOpcode(), BinOp->getOperand(0), BinOp->getOperand(1)});
-                }
-            }
-        }
+                if (auto *LLoad = dyn_cast<LoadInst>(BinOp->getOperand(0)))
+                    lhsPtr = LLoad->getPointerOperand();
+                if (auto *RLoad = dyn_cast<LoadInst>(BinOp->getOperand(1)))
+                    rhsPtr = RLoad->getPointerOperand();
 
-        // 2. Pre-calcolo di Gen e Inizializzazione di In
-        for (BasicBlock &BB : F) {
-            for (Instruction &I : BB) {
-                if (auto *BinOp = dyn_cast<BinaryOperator>(&I)) {
-                    Value *lhs = BinOp->getOperand(0);
-                    Value *rhs = BinOp->getOperand(1);
-                    Expression expr = {BinOp->getOpcode(), lhs, rhs};
-
-                    // GEN: Un'espressione entra in Gen[B] SOLO SE viene usata in B e 
-                    // i suoi operandi NON sono stati appena definiti all'interno di B stesso.
-                    // (Se fossero definiti in B, all'ingresso del blocco l'espressione non sarebbe valida!)
-                    if (!isDefinedIn(lhs, &BB) && !isDefinedIn(rhs, &BB)) {
+                if (lhsPtr && rhsPtr) {
+                    Expression expr = {BinOp->getOpcode(), lhsPtr, rhsPtr};
+                    if (KillVars[&BB].find(lhsPtr) == KillVars[&BB].end() &&
+                        KillVars[&BB].find(rhsPtr) == KillVars[&BB].end()) {
                         Gen[&BB].insert(expr);
                     }
                 }
             }
-            // Inizializziamo In al set universale per l'algoritmo
-            In[&BB] = UniversalSet;
+            if (auto *Store = dyn_cast<StoreInst>(&I)) {
+                KillVars[&BB].insert(Store->getPointerOperand());
+            }
+        }
+    }
+        // 2. Inizializzazione (Boundary e Interior Points)
+        ExpressionSet UniversalSet;
+        for (auto &BB : F) {
+            for (auto &expr : Gen[&BB]) UniversalSet.insert(expr);
+        }
+
+        for (BasicBlock &BB : F) {
+            // Inizializziamo In[B] al set universale (tranne Exit)
+            if (succ_empty(&BB)) { // Exit block
+                In[&BB] = {};
+            } else {
+                In[&BB] = UniversalSet;
+            }
         }
 
         // 3. Iterazione del Punto Fisso (Backward)
@@ -83,35 +87,33 @@ public:
         while (changes) {
             changes = false;
 
+            // Iteriamo all'indietro per efficienza (opzionale, ma consigliato)
             for (BasicBlock &BB : reverse(F)) {
+                if (succ_empty(&BB)) continue;
+
+                // Meet Operation: Out[B] = Intersection of In[Succ]
                 ExpressionSet currentOut;
-                
-                // MEET OPERATION e BOUNDARY CONDITION
-                if (succ_empty(&BB)) {
-                    currentOut = {};
-                } else {
-                    bool first = true;
-                    for (BasicBlock *S : successors(&BB)) {
-                        if (first) {
-                            currentOut = In[S];
-                            first = false;
-                        } else {
-                            ExpressionSet intersect;
-                            std::set_intersection(currentOut.begin(), currentOut.end(),
-                                                  In[S].begin(), In[S].end(),
-                                                  std::inserter(intersect, intersect.begin()));
-                            currentOut = std::move(intersect);
-                        }
+                bool first = true;
+                for (BasicBlock *S : successors(&BB)) {
+                    if (first) {
+                        currentOut = In[S];
+                        first = false;
+                    } else {
+                        ExpressionSet intersect;
+                        std::set_intersection(currentOut.begin(), currentOut.end(),
+                                              In[S].begin(), In[S].end(),
+                                              std::inserter(intersect, intersect.begin()));
+                        currentOut = std::move(intersect);
                     }
                 }
                 Out[&BB] = currentOut;
 
-                // TRANSFER FUNCTION: In[B] = Gen[B] U (Out[B] - Kill[B])
+                // Transfer Function: In[B] = Gen[B] U (Out[B] - Kill[B])
                 ExpressionSet currentIn = Gen[&BB];
                 for (const auto &expr : Out[&BB]) {
-                    // KILL IN SSA: Un'espressione che arriva da Out NON sopravvive in In se 
-                    // uno dei suoi operandi è stato definito in questo blocco (viene "Killata" andando a monte).
-                    if (!isDefinedIn(expr.lhs, &BB) && !isDefinedIn(expr.rhs, &BB)) {
+                    // Un'espressione sopravvive se nessuno dei suoi operandi è in KillVars[B] -> controlla se i puntatori sorgente degli operandi sono stati storati
+                    if (KillVars[&BB].find(expr.lhs) == KillVars[&BB].end() &&
+                        KillVars[&BB].find(expr.rhs) == KillVars[&BB].end()) {
                         currentIn.insert(expr);
                     }
                 }

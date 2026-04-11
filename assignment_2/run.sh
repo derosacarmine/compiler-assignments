@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Ricerca automatica di clang++ e opt
 find_llvm_bin() {
     if command -v clang++ &>/dev/null && command -v opt &>/dev/null; then
         return 0
@@ -10,7 +9,7 @@ find_llvm_bin() {
         /usr/lib/llvm-*/bin
         /usr/local/lib/llvm-*/bin
         /opt/llvm-*/bin
-        /opt/homebrew/opt/llvm/bin
+        /opt/homebrew/opt/llvm/bin        # macOS Homebrew
         "$HOME/llvm-*/bin"
         "$HOME/llvm/bin"
     )
@@ -25,7 +24,7 @@ find_llvm_bin() {
         done
     done
 
-    echo "Errore: clang++ e opt non trovati."
+    echo "Errore: clang++ e opt non trovati. Installa LLVM o aggiungilo al PATH."
     exit 1
 }
 
@@ -36,10 +35,15 @@ declare -A PASS_MAP
 
 usage() {
     echo "Usage: $0 -t <test_dir> [options]"
+    echo ""
     echo "Options:"
-    echo "  --vbe <path>    Plugin .so per very_busy_expressions"
-    echo "  --cp  <path>    Plugin .so per constant_propagation"
-    echo "  --dom <path>    Plugin .so per dominator_analysis"
+    echo "  -t <dir>        Path to test directory"
+    echo "  --vbe <path>    Plugin .so path for very_busy_expressions   (pass: very-busy-expressions)"
+    echo "  --cp  <path>    Plugin .so path for constant_propagation    (pass: constant-propagation)"
+    echo "  --dom <path>    Plugin .so path for dominator_analysis      (pass: dominator-analysis)"
+    echo ""
+    echo "Example:"
+    echo "  $0 -t ./tests --vbe ./build/VBE.so --cp ./build/CP.so --dom ./build/DOM.so"
     exit 1
 }
 
@@ -58,17 +62,39 @@ while [[ $# -gt 0 ]]; do
                PASS_MAP["dominator_analysis"]="dominator-analysis"
                shift 2 ;;
         -h|--help) usage ;;
-        *) echo "Argomento non riconosciuto: $1"; usage ;;
+        *) echo "Unrecognized argument: $1"; usage ;;
     esac
 done
 
-if [ -z "$TEST_DIR" ] || [ ${#PLUGIN_MAP[@]} -eq 0 ]; then
+if [ -z "$TEST_DIR" ]; then
+    echo "Error: you must specify test directory with -t."
     usage
 fi
 
-echo "Plugin caricati (Analisi in memoria):"
+if [ ! -d "$TEST_DIR" ]; then
+    echo "Error: directory '$TEST_DIR' not found."
+    exit 1
+fi
+
+if [ ${#PLUGIN_MAP[@]} -eq 0 ]; then
+    echo "Error: you must specify at least one plugin (--vbe, --cp, --dom)."
+    usage
+fi
+
 for key in "${!PLUGIN_MAP[@]}"; do
-    echo "  $key -> ${PLUGIN_MAP[$key]}"
+    plugin="${PLUGIN_MAP[$key]}"
+    if [ ! -f "$plugin" ]; then
+        echo "Error: plugin not found for '$key': $plugin"
+        exit 1
+    fi
+done
+
+LL_DIR="$TEST_DIR/ll"
+mkdir -p "$LL_DIR"
+
+echo "Plugin loaded:"
+for key in "${!PLUGIN_MAP[@]}"; do
+    echo "  $key -> ${PLUGIN_MAP[$key]} (pass: ${PASS_MAP[$key]})"
 done
 echo "---------------------------------"
 
@@ -80,29 +106,24 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
     pass="${PASS_MAP[$filename]}"
 
     if [ -z "$plugin" ]; then
-        echo "Skipping '$filename': nessun plugin associato."
+        echo "Skipping '$filename': no plugin associated."
         continue
     fi
 
-    echo "Processing: $filename (Pass: $pass)"
+    echo "Processing: $filename  (pass: $pass)"
     
-    # Esecuzione combinata:
-    # 1. clang++ genera l'IR e lo spara nello stdout (-o -)
-    # 2. opt riceve l'IR dallo stdin, carica il plugin ed esegue il pass
-    # 3. L'output trasformato di opt viene buttato in /dev/null
-    
-    clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone -fno-discard-value-names -g "$cpp_file" -o - | \
-    opt -load-pass-plugin "$plugin" -passes="$pass" -o /dev/null
-
-    # Salviamo subito lo stato della pipe in una variabile locale
-    rc_pipe=("${PIPESTATUS[@]}")
-
-    if [ "${rc_pipe[0]}" -ne 0 ]; then
-        echo "   [ERROR] Errore in Clang per $filename"
-    elif [ "${rc_pipe[1]}" -ne 0 ]; then
-        echo "   [ERROR] Errore in Opt (Pass) per $filename"
-    else
-        echo "   [OK] Analisi completata per $filename"
+    if !  clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone -fno-discard-value-names "$cpp_file" -o "$LL_DIR/$filename.ll"; then
+        echo "   [ERROR] Failed compilation for: $filename"
+        continue
     fi
-    echo "---------------------------------"
+
+    # mem2reg per promuovere allocas
+    #opt -load-pass-plugin "$plugin" -passes="mem2reg" \
+    #    "$LL_DIR/$filename.ll" -S -o "$LL_DIR/$filename.ll"
+
+    # Esecuzione della pass specifica
+    opt -load-pass-plugin "$plugin" -passes="$pass" \
+        "$LL_DIR/$filename.ll" -S -disable-output
+
+    echo "   [OK] Completed -> $OPT_DIR/${filename}_opt.ll"
 done
