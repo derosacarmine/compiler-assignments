@@ -33,9 +33,9 @@ endif()
 #===============================================================================
 # 3. ADD THE TARGET
 #===============================================================================
-add_library(LICM SHARED LICM.cpp)
+add_library(LoopInvariantCodeMotion SHARED LoopInvariantCodeMotion.cpp)
 
 # Allow undefined symbols in shared objects on Darwin (this is the default
 # behaviour on Linux)
-target_link_libraries(LICM
+target_link_libraries(LoopInvariantCodeMotion
   "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")
