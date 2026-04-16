@@ -576,7 +576,7 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 /**
  * @brief we just need to to an AND operation between the variable x and the constant-1
  * since this only works for constants that are powers of 2 bitwise they're going to be a 1 followed by 0s, so remove one and it's a 0 followed by 1s
- * this deletes from the result the most significant bit of the variable and only leaves a sum between the other active bits from the variable
+ * this deletes from the result the most significant bit of the variable and only leaves a sum between the other active bits from the variable 
  * 
  * @param op1 
  * @param type 
