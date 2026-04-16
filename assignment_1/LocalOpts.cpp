@@ -348,7 +348,7 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
  * @param c 
  * @return std::vector<Instruction*> 
  */
-/*std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c) {
+std::vector<Instruction*> tryDivReduction(Value* op1, ConstantInt* c) {
     std::vector<Instruction*> results;
     Value* finalValue = nullptr;
     
@@ -379,161 +379,11 @@ std::vector<Instruction*> tryMulReduction(Value* var, ConstantInt* c) {
     
     return results;
 }
-*/
-/**
- * Ottimizzazione della divisione intera con segno tramite moltiplicazione per costante magica.
- * Implementa l'algoritmo di Granlund-Montgomery.
- * * L'idea è sostituire n / d con (n * M) >> k, dove M è una "Magic Constant" e k è lo shift.
- * * 1. Calcolo dei parametri (M, precision):
- * - Si cerca la precisione minima 'precision' tale che l'approssimazione di 1/d sia corretta.
- * - 'm_low' e 'm_high' definiscono l'intervallo di confidenza per la costante magica.
- * - Il loop di riduzione ottimizza 'precision' per minimizzare il valore del moltiplicatore.
- * * 2. Generazione del codice IR :
- * - Moltiplicazione a 64 bit (per ottenere i 32 bit alti del prodotto).
- * - Correzione additiva/sottrattiva: necessaria se il magic number è >= 2^31.
- * - Correzione del segno finale: aggiunge il bit di segno per arrotondare verso zero.
- */
-std::vector<Instruction*> getDivisor(Value* v, ConstantInt* c) {
-    std::vector<Instruction*> insts;
-    
-    int32_t d = (int32_t)c->getSExtValue();
-    
-    if (d == 0 || d == 1 || d == -1) return {};
-
-    uint32_t abs_d = (d < 0) ? -d : d;
-
-    if( (abs_d  & (abs_d-1)) == 0){ //potenza di 2
-
-        //conta gli zeri da destra verso sinistra finchè non incontra 1
-        uint32_t log_d = __builtin_ctz(abs_d);
-        Type* i32 = v->getType();
-
-        // Se il val di v è negativo:
-        // dobbiamo aggiungere (distanza - 1) prima dello shift
-        // per arrotondare correttamente verso lo zero.
-        
-        // 1. Estrai il segno: sra x, 31
-        auto* ashr_sign = BinaryOperator::Create(Instruction::AShr, v, 
-                          ConstantInt::get(i32, 31), "sign_mask");
-        insts.push_back(ashr_sign);
-
-        // 2. Crea l'offset per isolare log_d bit (matematicamente per ottenere 2^log_d - 1, ma lo facciamo così poichè è branchless): lshr sign_mask, (32 - log_d)
-        auto* lshr_offset = BinaryOperator::Create(Instruction::LShr, ashr_sign, 
-                           ConstantInt::get(i32, 32 - log_d), "offset");
-        insts.push_back(lshr_offset);
-
-        // 3. Aggiungi l'offset al valore originale
-        auto* add_off = BinaryOperator::Create(Instruction::Add, v, lshr_offset, "add_offset");
-        insts.push_back(add_off);
-
-        // 4. Shift finale vero e proprio: ashr result, log_d
-        auto* final_ashr = BinaryOperator::Create(Instruction::AShr, add_off, 
-                           ConstantInt::get(i32, log_d), "final_res");
-        insts.push_back(final_ashr);
-
-        if(d < 0){
-            Instruction* neg = createNegativeInstr(c->getType(), final_ashr);
-            insts.push_back(neg);
-        }
-
-
-        return insts;
-    }
-
-    // Calcoliamo la potenza di 2 logaritmica --> clz
-    //Conta il numero di zeri consecutivi prima del primo bit 
-    // impostato a 1 (il bit più significativo), 
-    // partendo da sinistra verso destra nella rappresentazione 
-    // binaria di un intero.
-    uint32_t precision = 31 - __builtin_clz(abs_d - 1) + 1; 
-    uint64_t m_low = (1ULL << (32 + precision)) / abs_d;
-    uint64_t m_high = ((1ULL << (32 + precision)) + (1ULL << precision)) / abs_d;
-    
-    // Riduzione della precisione per trovare il magic number più piccolo
-    while ((m_low >> 1) < (m_high >> 1) && precision > 0) {
-        m_low >>= 1;
-        m_high >>= 1;
-        precision--;
-    }
-    
-    int64_t magic_number = (int64_t)m_high;
-    int32_t magic_32 = (int32_t)magic_number;
-    int shift_k = precision;
-
-    // --- GENERAZIONE ISTRUZIONI ---
-    Type* i32 = v->getType();
-    Type* i64 = Type::getInt64Ty(v->getContext());
-
-    // 1. Moltiplicazione Wide (64-bit)
-    auto* x64 = new SExtInst(v, i64, "sext_v");
-    insts.push_back(x64);
-
-    auto* m64 = ConstantInt::get(i64, magic_number);
-    auto* prod = BinaryOperator::Create(Instruction::Mul, x64, m64, "mul_tmp");
-    insts.push_back(prod);
-
-    // 2. Estrazione della parte alta (il risultato della moltiplicazione magica)
-    auto* high64 = BinaryOperator::Create(Instruction::AShr, prod, ConstantInt::get(i64, 32), "ashr_high");
-    insts.push_back(high64);
-
-    auto* high = new TruncInst(high64, i32, "trunc_high");
-    insts.push_back(high);
-
-    Value* current_v = high;
-
-    // 3. Correzione Additiva/Sottrattiva (necessaria se il magic number eccede 2^31)
-    if (magic_32 < 0 /*&& d > 0*/) {
-        auto* fix = BinaryOperator::Create(Instruction::Add, current_v, v, "fix_pos");
-        insts.push_back(fix);
-        current_v = fix;
-    }
-
-    // 4. Shift Aritmetico finale per scalare il risultato
-    if (shift_k > 0) {
-        auto* sar = BinaryOperator::Create(Instruction::AShr, current_v, ConstantInt::get(i32, shift_k), "final_sar");
-        insts.push_back(sar);
-        current_v = sar;
-    }
-
-    // 5. Correzione Segno (Arrotondamento verso zero)
-    // Estraiamo il bit di segno (1 se negativo, 0 se positivo)
-    auto* sign = BinaryOperator::Create(Instruction::LShr, current_v, ConstantInt::get(i32, 31), "sign_corr");
-    insts.push_back(sign);
-
-    // Aggiungiamo il bit di segno al risultato per correggere il troncamento di ashr
-    auto* div_abs = BinaryOperator::Create(Instruction::Add, current_v, sign, "div_abs");
-    insts.push_back(div_abs);
-    current_v = div_abs;
-
-    if (d < 0) {
-        auto* final_neg = BinaryOperator::Create(Instruction::Sub, 
-                        ConstantInt::get(i32, 0), current_v, "final_div_neg");
-        insts.push_back(final_neg);
-        current_v = final_neg;
-    }
-
-    return insts;
-}
 
 /**
- * formula: x - ((x >> k) << k)
- * this function works with the signed rem, which would otherwise give wrong results for negative variables if not treated differently from positive ones
- */
-/*
-std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
-    std::vector<Instruction*> results;
-    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
-    results.push_back(ashr);
-    Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
-    results.push_back(shl);
-    Instruction* sub = BinaryOperator::Create(Instruction::Sub, op1, shl);
-    results.push_back(sub);
-    return results;
-}
-*/
-
-/**
- * @brief logic for the reduction of the signed remainder
+ * @brief formula: x - ((x >> k) << k)
+ * logic for the reduction of the signed remainder
+ * the commented code would be needed in order to implement a C like remainder
  * 
  * @param op1 
  * @param type 
@@ -543,6 +393,7 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
 std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     std::vector<Instruction*> results;
     
+    /*
     // Ensure 'type' is an integer to retrieve bitwidth
     unsigned bitwidth = type->getIntegerBitWidth();
 
@@ -560,10 +411,11 @@ std::vector<Instruction*> trySRemReduction(Value* op1, Type* type, unsigned k) {
     // 3. Add the offset to the original dividend to handle rounding towards zero
     Instruction* adjusted = BinaryOperator::Create(Instruction::Add, op1, offset);
     results.push_back(adjusted);
+    */
 
-    //push 
-    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, adjusted, ConstantInt::get(type, k));
+    Instruction* ashr = BinaryOperator::Create(Instruction::AShr, op1, ConstantInt::get(type, k));
     results.push_back(ashr);
+
     Instruction* shl = BinaryOperator::Create(Instruction::Shl, ashr, ConstantInt::get(type, k));
     results.push_back(shl);
 
@@ -598,6 +450,8 @@ std::vector<Instruction*> tryURemReduction(Value* op1, Type* type, APInt absVal)
  * needs a different optimization in case of a negative variable, this is at the cost
  * of a worse optimization for the SRem in the case of a positive variable which could be optimized
  * the same as the URem.
+ * This optimization is only applied if the costant's a power of 2
+ *
  * 
  * @param op1 
  * @param cst2 
@@ -665,11 +519,7 @@ bool runOnBasicBlock(BasicBlock &B) override {
 
             case Instruction::SDiv:
             case Instruction::UDiv:{
-                // divisore non costante -> non ottimizzabile
-                if (!cst2) continue;
-
-                newInsts = getDivisor(op1, cst2);
-                if (newInsts.empty()) continue;
+                if (cst2) newInsts = tryDivReduction(op1, cst2);
                 break;
             }
 
