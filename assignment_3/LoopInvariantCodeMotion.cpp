@@ -32,7 +32,8 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
         auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
         std::set<Instruction*> invariantSet;
-
+        
+        std::set<BasicBlock*> dominatorSet;
 
         //Loop Invariant logic
         for (Loop *LL : LI.getLoopsInPreorder()) {
@@ -82,23 +83,84 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                 outs() << "\n";
             }
         }
-        
 
-        for(auto *Node : depth_first(DT.getRootNode())) {
-                
-
-        }
+    
 
         //TODO: Code Motion Logic
+        /*
+            Algoritmo per la Code Motion
+        Dato un insieme di nodi in un loop
+        • Calcolare le reaching definitions
+        • Trovare le istruzioni loop-invariant
+        all’uscita del loop
+        • Calcolare i dominatori (dominance tree)
+        • Trovare le uscite del loop (i successori fuori dal loop)
+        • Le istruzioni candidate alla code motion:
+        • Sono loop invariant
+        • Si trovano in blocchi che dominano tutte le uscite del loop
+        • Assegnano un valore a variabili non assegnate altrove nel loop
+        • Si trovano in blocchi che dominano tutti i blocchi nel loop che usano la
+        variabile a cui si sta assegnando un valore
+        • Eseguire una ricerca depth-first dei blocchi
+        • Spostare l’istruzione candidata nel preheader se tutte le istruzioni
+        invarianti da cui questa dipende sono state spostate
+        */
+
+
     for (Loop *LL : LI.getLoopsInPreorder()) {
         for (auto instr : invariantSet) {
-
+            if(BasicBlock *pre_header = LL->getLoopPreheader())
+                instr->moveBefore(pre_header->getTerminator());
+        }
+        for (auto block : dominatorSet) {
+            Instruction* instr = block->getTerminator();
             if(BasicBlock *pre_header = LL->getLoopPreheader())
                 instr->moveBefore(pre_header->getTerminator());
         }
            
     }
-        
+
+
+    /*RIFERIMENTO: ESERCIZIO DELL'ASS 2 DOMINATOR ANALYSIS
+        */ 
+    for (Loop *LL : LI.getLoopsInPreorder()) {
+
+        SmallVector<BasicBlock*, 8> exitBlocks;
+
+        //1. trovo i blocchi di uscita del loop
+        // blocchi DENTRO il loop che hanno
+        // almeno un successore FUORI dal loop
+        LL->getExitingBlocks(exitBlocks);
+
+        if(exitBlocks.empty()) continue;
+
+        // 2. Dominatori
+        /*
+         Un nodo d domina un nodo n in un grafo (d dom n) se
+        ogni percorso dall’ENTRY node a n passa per d;
+        ogni nodo d domina solo i suoi discendenti nell’albero
+    
+        */
+        for(auto *node : depth_first(DT.getRootNode())) {
+            BasicBlock *BB = node->getBlock();    
+
+            if(!LL->contains(BB))   continue;
+
+            bool dominatesAllExits = true;
+            for (BasicBlock *exitBB : exitBlocks) {
+                //se A dom B
+                // internamente risale l'albero da B verso la root
+                // e controlla se trova A 
+                if (!DT.dominates(BB, exitBB)) {
+                    dominatesAllExits = false;
+                    break;
+                }
+            }
+
+            if (dominatesAllExits)
+                dominatorSet.insert(BB);
+        }
+    }
         
         return PreservedAnalyses::all();
     }
