@@ -20,6 +20,45 @@ using namespace llvm;
 
 #define DEBUG true
 
+//TODO: Code Motion Logic
+        /* # = fatto
+        Algoritmo per la Code Motion
+        Dato un insieme di nodi in un loop
+
+        # Calcolare le reaching definitions     da vedere
+
+        # Trovare le istruzioni loop-invariant      controllare
+        all’uscita del loop
+        # Calcolare i dominatori (dominance tree)
+        # Trovare le uscite del loop (i successori fuori dal loop)
+
+         Le istruzioni candidate alla code motion:
+        # Sono loop invariant
+        # Si trovano in blocchi che dominano tutte le uscite del loop
+        
+        • Oppure la variabile definita dall’istruzione è dead
+          all’uscita del loop
+        
+        # Assegnano un valore a variabili non assegnate altrove nel loop
+        • Si trovano in blocchi che dominano tutti i blocchi nel loop che usano la
+        variabile a cui si sta assegnando un valore
+
+         Eseguire una ricerca depth-first dei blocchi
+        • Spostare l’istruzione candidata nel preheader se tutte le istruzioni
+        invarianti da cui questa dipende sono state spostate
+        */
+
+        /*
+        x=y+z
+
+        q=...x
+        a = getUses instr
+        b = getParent instr
+        
+        for (qualcosa in a)
+            check b dominates getParent(qualcosa)
+        */
+
 namespace {
 
 // cheat function ?
@@ -84,29 +123,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             }
         }
 
-    
-
-        //TODO: Code Motion Logic
-        /*
-            Algoritmo per la Code Motion
-        Dato un insieme di nodi in un loop
-        • Calcolare le reaching definitions
-        • Trovare le istruzioni loop-invariant
-        all’uscita del loop
-        • Calcolare i dominatori (dominance tree)
-        • Trovare le uscite del loop (i successori fuori dal loop)
-        • Le istruzioni candidate alla code motion:
-        • Sono loop invariant
-        • Si trovano in blocchi che dominano tutte le uscite del loop
-        • Assegnano un valore a variabili non assegnate altrove nel loop
-        • Si trovano in blocchi che dominano tutti i blocchi nel loop che usano la
-        variabile a cui si sta assegnando un valore
-        • Eseguire una ricerca depth-first dei blocchi
-        • Spostare l’istruzione candidata nel preheader se tutte le istruzioni
-        invarianti da cui questa dipende sono state spostate
-        */
-
-
     for (Loop *LL : LI.getLoopsInPreorder()) {
         for (auto instr : invariantSet) {
             if(BasicBlock *pre_header = LL->getLoopPreheader())
@@ -117,13 +133,13 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             if(BasicBlock *pre_header = LL->getLoopPreheader())
                 instr->moveBefore(pre_header->getTerminator());
         }
-           
     }
 
 
     /*RIFERIMENTO: ESERCIZIO DELL'ASS 2 DOMINATOR ANALYSIS
         */ 
     for (Loop *LL : LI.getLoopsInPreorder()) {
+        if(!LL->isLoopSimplifyForm()) continue;
 
         SmallVector<BasicBlock*, 8> exitBlocks;
 
