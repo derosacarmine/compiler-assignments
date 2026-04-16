@@ -33,6 +33,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
         std::set<Instruction*> invariantSet;
 
+
         //Loop Invariant logic
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
@@ -82,8 +83,23 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             }
         }
         
-        //TODO: Code Motion Logic
 
+        for(auto *Node : depth_first(DT.getRootNode())) {
+                
+
+        }
+
+        //TODO: Code Motion Logic
+    for (Loop *LL : LI.getLoopsInPreorder()) {
+        for (auto instr : invariantSet) {
+
+            if(BasicBlock *pre_header = LL->getLoopPreheader())
+                instr->moveBefore(pre_header->getTerminator());
+        }
+           
+    }
+        
+        
         return PreservedAnalyses::all();
     }
 
