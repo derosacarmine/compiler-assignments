@@ -36,7 +36,7 @@ using namespace llvm;
         # Sono loop invariant
         # Si trovano in blocchi che dominano tutte le uscite del loop
         
-        • Oppure la variabile definita dall’istruzione è dead
+        # Oppure la variabile definita dall’istruzione è dead
           all’uscita del loop
         
         # Assegnano un valore a variabili non assegnate altrove nel loop
@@ -65,6 +65,60 @@ namespace {
 // loop->hasLoopInvariantOperands(const Instruction *I)
 
 struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
+
+    //function that find the exiting blocks in the loop
+    void getExitBlocks(Loop* LL, std::set<BasicBlock*> * exit_block_set){
+        for(BasicBlock* BB : LL->getBlocks()){
+            //because the branch instruction is always the last instruction in the BB, but it's not necessarily an exit block
+            //I have to check if the BB successors are not in the loop
+            Instruction* i = BB->getTerminator();
+            if(i->getOpcode() == Instruction::Br){
+                    for (BasicBlock* succ : successors(BB)) {
+                    if (!LL->contains(succ)) {
+                        exit_block_set->insert(BB);
+                        break;
+                    }
+                }
+            }
+            
+        }
+
+    }
+
+    //this function return that is a dead variable
+    bool isDeadAfterLoop(Instruction* I, Loop* LL, std::set<BasicBlock*> * exit_block_set) {
+
+        getExitBlocks(LL,exit_block_set);   // BB fuori dal loop (i successori delle uscite)
+
+        for (User* U : I->users()) {    //mi scorre tutti gli usi dell'istruzione tramite la def use chain
+            Instruction* userInst = cast<Instruction>(U);
+            BasicBlock* userBB = userInst->getParent();
+
+            // se l'uso è fuori dal loop -> non è dead
+            if (!LL->contains(userBB)) {
+                return false;
+            }
+        }
+        return true;  // tutti gli usi sono dentro il loop -> dead fuori
+    }
+
+
+
+    //this function return if the dominator BB dominates the dominated BB 
+    bool isDominate(DominatorTree &DT, BasicBlock* dominator, BasicBlock* dominated){
+        DomTreeNode* node = DT.getNode(dominated);    //torna il dominator tree di dominated
+
+        //risalgo fino alla radice
+        while(node != nullptr){
+            if(node->getBlock() == dominator)
+                return true;
+
+            node = node->getIDom(); // vai al dominatore immediato (padre)
+        }
+
+        return false;
+    }
+
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
@@ -123,6 +177,8 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             }
         }
 
+
+        // TODO da fare code motion vera e propria quindi con tutti i checks
     for (Loop *LL : LI.getLoopsInPreorder()) {
         for (auto instr : invariantSet) {
             if(BasicBlock *pre_header = LL->getLoopPreheader())
@@ -135,18 +191,21 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         }
     }
 
+    
+
 
     /*RIFERIMENTO: ESERCIZIO DELL'ASS 2 DOMINATOR ANALYSIS
         */ 
     for (Loop *LL : LI.getLoopsInPreorder()) {
         if(!LL->isLoopSimplifyForm()) continue;
 
-        SmallVector<BasicBlock*, 8> exitBlocks;
+        std::set<BasicBlock*> exitBlocks;
 
         //1. trovo i blocchi di uscita del loop
         // blocchi DENTRO il loop che hanno
         // almeno un successore FUORI dal loop
-        LL->getExitingBlocks(exitBlocks);
+        //LL->getExitingBlocks(exitBlocks);
+        getExitBlocks(LL, &exitBlocks);
 
         if(exitBlocks.empty()) continue;
 
@@ -167,10 +226,15 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                 //se A dom B
                 // internamente risale l'albero da B verso la root
                 // e controlla se trova A 
-                if (!DT.dominates(BB, exitBB)) {
+                /*if (!DT.dominates(BB, exitBB)) {
+                    dominatesAllExits = false;
+                    break;
+                }*/
+                if (!isDominate(DT, BB, exitBB)) {
                     dominatesAllExits = false;
                     break;
                 }
+
             }
 
             if (dominatesAllExits)
