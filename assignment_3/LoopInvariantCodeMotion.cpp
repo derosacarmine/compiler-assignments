@@ -40,7 +40,7 @@ using namespace llvm;
           all’uscita del loop
         
         # Assegnano un valore a variabili non assegnate altrove nel loop
-        • Si trovano in blocchi che dominano tutti i blocchi nel loop che usano la
+        # Si trovano in blocchi che dominano tutti i blocchi nel loop che usano la
         variabile a cui si sta assegnando un valore
 
          Eseguire una ricerca depth-first dei blocchi
@@ -119,12 +119,36 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         return false;
     }
 
+    bool dominatesAllUses(Instruction* I, Loop* LL, DominatorTree &DT) {
+        BasicBlock* DefBB = I->getParent();
+
+        for (User* U : I->users()) {
+            Instruction* UserInst = dyn_cast<Instruction>(U);
+            if (!UserInst) continue;
+
+            BasicBlock* UserBB = UserInst->getParent();
+
+            if (!LL->contains(UserBB)) {
+                BasicBlock* Preheader = LL->getLoopPreheader();
+                if (!Preheader || !DT.dominates(DefBB, Preheader)) {
+                    return false;
+                }
+            } else {
+                if (!DT.dominates(DefBB, UserBB)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
         auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
         std::set<Instruction*> invariantSet;
+        std::set<Instruction*> toMove;
         
         std::set<BasicBlock*> dominatorSet;
 
@@ -164,6 +188,14 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                             invariantSet.insert(&I);
                             changed = true;
                         }
+
+                        //se in questo for e while si popola correttamente il set
+                        //allora poi possiamo procedere con lo scorrerlo e prendere solo
+                        //le candidate alla code motion
+
+                        //alternativamente possiamo evitare invariantSet e inserirle ogni volta che
+                        //troviamo isInvariant == true nel set finale aggiungendo gia ora
+                        //le chiamate alle funzioni per i checks della code motion
                     }
                 }
             }
