@@ -35,8 +35,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
     cerco di risalire l'idom di un nodo che non esiste ancora nell'albero e crashi.
      */
 
-    DominatorTree& buildDomTree(Function &F) {
-            DominatorTree* DT = new DominatorTree();
+    void buildDomTree(Function &F, DominatorTree *DT) {
             
             // root
             BasicBlock* entry = &F.getEntryBlock();
@@ -80,7 +79,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                 DT->addNewBlock(BB, idomBB);
             }
             
-            return *DT;
+            
         }
 
 
@@ -119,7 +118,8 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-        auto &DT = buildDomTree(F);
+        DominatorTree DT;
+        buildDomTree(F, &DT);
         bool modified = false;
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
