@@ -82,7 +82,47 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             
         }
 
-
+        /* Dato che devo trovare i back edge poichè sono quelli che formano i Loop, sfrutto il mio DT creato;
+            un back edge si ha quando il terminatore di un basic block ha come successore un basic block che lo domina
+         */
+         /*
+        std::map<BasicBlock*, std::vector<BasicBlock*>> buildLoop(Function &F, DominatorTree *DT){
+            std::map<BasicBlock*, std::vector<BasicBlock*>> loop;
+            
+            for (BasicBlock *BB : F){
+                for(BasicBlock *succ : successors(BB)){
+                    if(DT->dominates(succ, BB)){
+                        // succ è l'header, BB è il latch(ovvero i BB che hanno direttamente il back edge verso la header)
+                        // visita a ritroso nel CFG per trovare tutti i BB del loop
+                        //tutti i nodi raggiungibili risalendo i predecessori partendo dal latch, fino ad arrivare all'header, fanno parte del loop
+                        //metti il latch nella worklist, poi per ogni nodo che estrai aggiungi i suoi predecessori 
+                        // se non li hai già visitati e se non sono l'header
+                        std::vector<BasicBlock*> worklist;
+                        std::set<BasicBlock*> visited;
+                        
+                        worklist.push_back(BB);
+                        visited.insert(BB);
+                        visited.insert(succ); // l'header la aggiungiamo dopo
+                        
+                        while(!worklist.empty()){
+                            BasicBlock *current = worklist.back();
+                            worklist.pop_back();
+                            loop[succ].push_back(current);
+                            
+                            for(BasicBlock *pred : predecessors(current)){
+                                if(visited.find(pred) == visited.end()){
+                                    visited.insert(pred);
+                                    worklist.push_back(pred);
+                                }
+                            }
+                        }
+                        loop[succ].push_back(succ); // aggiungo l'header
+                    }
+                }
+            }
+            return loop;
+        }
+        */
 
     //this function return that is a dead variable
     bool isDeadAfterLoop(Instruction* I, Loop* LL) {
@@ -117,9 +157,13 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
-        LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
+        //LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
+        //auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
         DominatorTree DT;
         buildDomTree(F, &DT);
+
+        LoopInfo &LI = LI.analyze(DT);  //i cerca nel CFG originale della funzione, usando il DT solo per verificare se un edge è effettivamente un back edge
+
         bool modified = false;
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
