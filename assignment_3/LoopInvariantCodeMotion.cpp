@@ -64,12 +64,12 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                         idomBB = pred;  // primo predecessore processato
                     } else {
                         //trovo il dominatore immediato
-                        
-                        while(idomBB != pred){
-                            if(post_order_num[idomBB] > post_order_num[pred])
+                        BasicBlock* predCursor = pred;
+                        while(idomBB != predCursor){
+                            if(post_order_num[idomBB] > post_order_num[predCursor])
                                 idomBB = DT->getNode(idomBB)->getIDom()->getBlock();
                             else
-                                pred = DT->getNode(pred)->getIDom()->getBlock();
+                                predCursor = DT->getNode(predCursor)->getIDom()->getBlock();
 
                         }
 
@@ -162,7 +162,8 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         DominatorTree DT;
         buildDomTree(F, &DT);
 
-        LoopInfo &LI = LI.analyze(DT);  //i cerca nel CFG originale della funzione, usando il DT solo per verificare se un edge è effettivamente un back edge
+        LoopInfo LI;
+        LI.analyze(DT);  //i cerca nel CFG originale della funzione, usando il DT solo per verificare se un edge è effettivamente un back edge
 
         bool modified = false;
         for (Loop *LL : LI.getLoopsInPreorder()) {
