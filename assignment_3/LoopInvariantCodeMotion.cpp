@@ -82,7 +82,10 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             
         }
 
-        /* Dato che devo trovare i back edge poichè sono quelli che formano i Loop, sfrutto il mio DT creato;
+        /* 
+        NOTA: Il problema è che LoopInfo è un po' problematica e non posso modificare direttamente le cose, perciò non uso sta fz.
+
+        Dato che devo trovare i back edge poichè sono quelli che formano i Loop, sfrutto il mio DT creato;
             un back edge si ha quando il terminatore di un basic block ha come successore un basic block che lo domina
          */
          /*
