@@ -25,6 +25,66 @@ namespace {
 
 struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
+    /*
+    Per creare un DominatorTree mi devo basare sui dominatori immediati;
+    il dominatore immediato di un nodo è il più basso che lo precede in cui 2 predecessori puntano
+    Hai due nodi A e B nell'albero, e vuoi trovare il loro antenato comune più basso,
+    basta che io risalga gli idom dei due nodi contemporaneamente finchè non trovo corrispondenza, in sto caso 
+    risalgo pred e idomBB che sarebbe solo che per fare si che avvenga contemporaneamente la risalita devo controllare il livello;
+    Poi i back edge li salto perchè sono gli archi che nel CFG vanno indietro verso un nodo già visitato, arrivando dall'alto rischio che 
+    cerco di risalire l'idom di un nodo che non esiste ancora nell'albero e crashi.
+     */
+
+    DominatorTree& buildDomTree(Function &F) {
+            DominatorTree* DT = new DominatorTree();
+            
+            // root
+            BasicBlock* entry = &F.getEntryBlock();
+            DT->addNewBlock(entry, nullptr);
+            
+            //cioè dall'alto verso il basso banalmente
+            ReversePostOrderTraversal<Function*> RPOT(&F);
+            int num_lvl = 0;
+            std::map<BasicBlock*, int> post_order_num;
+            for (BasicBlock* BB : RPOT) {
+                post_order_num[BB] = num_lvl++;
+            }
+
+            for (BasicBlock* BB : RPOT) {
+
+                if (BB == entry) continue;  // già aggiunto
+                
+                BasicBlock* idomBB = nullptr;
+                
+                for (BasicBlock* pred : predecessors(BB)) {
+                    // se il predecessore non ha ancora un nodo nell'albero saltalo
+                    // (back edge di un loop)
+                    if (!DT->getNode(pred)) continue;
+                    
+                    if (idomBB == nullptr) {
+                        idomBB = pred;  // primo predecessore processato
+                    } else {
+                        //trovo il dominatore immediato
+                        
+                        while(idomBB != pred){
+                            if(post_order_num[idomBB] > post_order_num[pred])
+                                idomBB = DT->getNode(idomBB)->getIDom()->getBlock();
+                            else
+                                pred = DT->getNode(pred)->getIDom()->getBlock();
+
+                        }
+
+                    }
+                }
+                
+                DT->addNewBlock(BB, idomBB);
+            }
+            
+            return *DT;
+        }
+
+
+
     //this function return that is a dead variable
     bool isDeadAfterLoop(Instruction* I, Loop* LL) {
 
@@ -59,7 +119,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-        auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+        auto &DT = buildDomTree(F);
         bool modified = false;
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
@@ -147,6 +207,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
     static bool isRequired() { return true; }
 }; 
 }
+
 
 //-----------------------------------------------------------------------------
 // New PM Registration
