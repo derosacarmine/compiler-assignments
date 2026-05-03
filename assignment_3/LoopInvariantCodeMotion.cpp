@@ -25,108 +25,6 @@ namespace {
 
 struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
-    /*
-    Per creare un DominatorTree mi devo basare sui dominatori immediati;
-    il dominatore immediato di un nodo è il più basso che lo precede in cui 2 predecessori puntano
-    Hai due nodi A e B nell'albero, e vuoi trovare il loro antenato comune più basso,
-    basta che io risalga gli idom dei due nodi contemporaneamente finchè non trovo corrispondenza, in sto caso 
-    risalgo pred e idomBB che sarebbe solo che per fare si che avvenga contemporaneamente la risalita devo controllare il livello;
-    Poi i back edge li salto perchè sono gli archi che nel CFG vanno indietro verso un nodo già visitato, arrivando dall'alto rischio che 
-    cerco di risalire l'idom di un nodo che non esiste ancora nell'albero e crashi.
-     */
-
-    void buildDomTree(Function &F, DominatorTree *DT) {
-            
-            // root
-            BasicBlock* entry = &F.getEntryBlock();
-            DT->addNewBlock(entry, nullptr);
-            
-            //cioè dall'alto verso il basso banalmente
-            ReversePostOrderTraversal<Function*> RPOT(&F);
-            int num_lvl = 0;
-            std::map<BasicBlock*, int> post_order_num;
-            for (BasicBlock* BB : RPOT) {
-                post_order_num[BB] = num_lvl++;
-            }
-
-            for (BasicBlock* BB : RPOT) {
-
-                if (BB == entry) continue;  // già aggiunto
-                
-                BasicBlock* idomBB = nullptr;
-                
-                for (BasicBlock* pred : predecessors(BB)) {
-                    // se il predecessore non ha ancora un nodo nell'albero saltalo
-                    // (back edge di un loop)
-                    if (!DT->getNode(pred)) continue;
-                    
-                    if (idomBB == nullptr) {
-                        idomBB = pred;  // primo predecessore processato
-                    } else {
-                        //trovo il dominatore immediato
-                        BasicBlock* predCursor = pred;
-                        while(idomBB != predCursor){
-                            if(post_order_num[idomBB] > post_order_num[predCursor])
-                                idomBB = DT->getNode(idomBB)->getIDom()->getBlock();
-                            else
-                                predCursor = DT->getNode(predCursor)->getIDom()->getBlock();
-
-                        }
-
-                    }
-                }
-                
-                DT->addNewBlock(BB, idomBB);
-            }
-            
-            
-        }
-
-        /* 
-        NOTA: Il problema è che LoopInfo è un po' problematica e non posso modificare direttamente le cose, perciò non uso sta fz.
-
-        Dato che devo trovare i back edge poichè sono quelli che formano i Loop, sfrutto il mio DT creato;
-            un back edge si ha quando il terminatore di un basic block ha come successore un basic block che lo domina
-         */
-         /*
-        std::map<BasicBlock*, std::vector<BasicBlock*>> buildLoop(Function &F, DominatorTree *DT){
-            std::map<BasicBlock*, std::vector<BasicBlock*>> loop;
-            
-            for (BasicBlock *BB : F){
-                for(BasicBlock *succ : successors(BB)){
-                    if(DT->dominates(succ, BB)){
-                        // succ è l'header, BB è il latch(ovvero i BB che hanno direttamente il back edge verso la header)
-                        // visita a ritroso nel CFG per trovare tutti i BB del loop
-                        //tutti i nodi raggiungibili risalendo i predecessori partendo dal latch, fino ad arrivare all'header, fanno parte del loop
-                        //metti il latch nella worklist, poi per ogni nodo che estrai aggiungi i suoi predecessori 
-                        // se non li hai già visitati e se non sono l'header
-                        std::vector<BasicBlock*> worklist;
-                        std::set<BasicBlock*> visited;
-                        
-                        worklist.push_back(BB);
-                        visited.insert(BB);
-                        visited.insert(succ); // l'header la aggiungiamo dopo
-                        
-                        while(!worklist.empty()){
-                            BasicBlock *current = worklist.back();
-                            worklist.pop_back();
-                            loop[succ].push_back(current);
-                            
-                            for(BasicBlock *pred : predecessors(current)){
-                                if(visited.find(pred) == visited.end()){
-                                    visited.insert(pred);
-                                    worklist.push_back(pred);
-                                }
-                            }
-                        }
-                        loop[succ].push_back(succ); // aggiungo l'header
-                    }
-                }
-            }
-            return loop;
-        }
-        */
-
     //this function return that is a dead variable
     bool isDeadAfterLoop(Instruction* I, Loop* LL) {
 
@@ -160,14 +58,8 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
-        //LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-        //auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-        DominatorTree DT;
-        buildDomTree(F, &DT);
-
-        LoopInfo LI;
-        LI.analyze(DT);  //i cerca nel CFG originale della funzione, usando il DT solo per verificare se un edge è effettivamente un back edge
-
+        LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
+        auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
         bool modified = false;
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
@@ -255,7 +147,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
     static bool isRequired() { return true; }
 }; 
 }
-
 
 //-----------------------------------------------------------------------------
 // New PM Registration
