@@ -1,7 +1,5 @@
 #!/bin/bash
 
-#ALLOWED_PASSES=("algebraic-identity" "strength-reduction" "multi-instruction")
-
 usage() {
     echo "usage: $0 -t <test_dir> -p <plugin_path>"
     echo "  -t: Directory containing .cpp test files"
@@ -22,12 +20,8 @@ done
 
 shift $((OPTIND-1))
 
-# 1. Normalizzazione: uniamo tutto e sostituiamo eventuali virgole con spazi
-# Questo permette all'utente di scrivere sia "pass1 pass2" che "pass1,pass2"
-INPUT_ARGS=$(echo "$*" | tr ',' ' ')
+#INPUT_ARGS=$(echo "$*" | tr ',' ' ')
 
-
-# Controlli percorsi
 if [ -z "$TEST_DIR" ] || [ -z "$PLUGIN_PATH" ]; then
     echo "Error: Missing parameters."
     usage
@@ -48,7 +42,6 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
     
     echo "Processing: $filename"
 
-    # Compilazione
     if ! clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone "$cpp_file" -o "$LL_DIR/$filename.ll"; then
         echo "   [ERROR] failed compilation for file: $filename"
         continue

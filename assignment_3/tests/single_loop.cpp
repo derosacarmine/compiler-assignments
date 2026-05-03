@@ -1,17 +1,35 @@
-void fun(int n){
+int fun(int n, int x, int y, int* array) {
+    n =2;
+    int invariant_calc = 0;
+    int sum = 0;
+    int b = 3;
 
-    int b=3;
-    int c=4;
-    int e;
-    for(int i=0;i<n;i++){
-        int a = b+c;
-        if(a<=10){
-            e = 2;
+    int i = 0;
+
+    do {
+
+        int a = b+1;
+        
+        // Condizione 1: C'è un'uscita anticipata (Early Exit). 
+        // Questo significa che il blocco successivo NON domina l'uscita del loop.
+        if (array[i] < 0) {
+            continue; 
         }
-        else {
-            e = 3;
+
+        // Condizione 2: L'istruzione è condizionale.
+        if (x > 10) {
+            // ISTRUZIONE INVARIANTE: 'x' e 'y' non vengono mai modificati nel loop.
+            // In LLVM IR sarà un'istruzione "add" (Safe to Speculate).
+            // Entrerà nell'invariantSet.
+            invariant_calc = x + y;
         }
-        int d = a+1;
-        int f = e+2;
-    }
+
+        sum += array[i];
+
+        i++;
+    } while (i < n);
+
+    // Condizione 3: invariant_calc viene usata FUORI dal loop.
+    // Di conseguenza, isDeadAfterLoop() restituirà 'false'.
+    return sum + invariant_calc;
 }

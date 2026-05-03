@@ -12,8 +12,10 @@
 #include <llvm-19/llvm/IR/Value.h>
 #include <llvm-19/llvm/Support/Casting.h>
 #include "llvm/IR/Dominators.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/ADT/DepthFirstIterator.h"
 
-#include <set>
+#include <unordered_set>
 #include <map>
 #include <vector>
 
@@ -24,22 +26,40 @@ using namespace llvm;
 namespace {
 
 struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
-
-    //this function return that is a dead variable
-    bool isDeadAfterLoop(Instruction* I, Loop* LL) {
-
-        for (User* U : I->users()) {    //mi scorre tutti gli usi dell'istruzione tramite la def use chain
+    
+    /**
+     * @brief checks if the variable is dead after exiting the loop
+     * 
+     * @param I 
+     * @param LL 
+     * @return true 
+     * @return false 
+     */
+    /*bool isDeadAfterLoop(Instruction* I, Loop* LL) {
+        for (User* U : I->users()) {
             Instruction* userInst = cast<Instruction>(U);
             BasicBlock* userBB = userInst->getParent();
 
-            // se l'uso è fuori dal loop -> non è dead
+
             if (!LL->contains(userBB)) {
+                // non e' morta
                 return false;
             }
         }
-        return true;
-    }
 
+        //E" morta
+        return true;
+    }*/
+
+    /**
+     * @brief checks that the instruction is in a block that dominates every loop's exit
+     * 
+     * @param I 
+     * @param LL 
+     * @param DT 
+     * @return true 
+     * @return false 
+     */
     bool dominatesExits(Instruction* I, Loop* LL, DominatorTree& DT){
         SmallVector<BasicBlock*> exitBlocks;
         LL->getExitBlocks(exitBlocks);
@@ -64,20 +84,20 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         for (Loop *LL : LI.getLoopsInPreorder()) {
             if(!LL->isLoopSimplifyForm()) continue;
             
-            std::set<Instruction*> invariantSet;
+            std::unordered_set<Instruction*> invariantSet;
             std::vector<Instruction*> toMove;
+            std::unordered_set<Instruction*> movedSet;
 
             bool changed = true;
             while (changed) {
                 changed = false;
                 
+                //Loop Invariant
                 for (BasicBlock *BB : LL->getBlocks()) {
                     for (Instruction &I : *BB) {
+                        if (!isSafeToSpeculativelyExecute(&I)) continue;
+
                         if (I.getOpcode() == Instruction::PHI || invariantSet.count(&I) > 0) 
-                            continue;        
-                        
-                        // TODO: check if there are other instructions that can be used
-                        if(I.getNumOperands() != 2)
                             continue;
 
                         bool isInvariant = true;
@@ -103,14 +123,15 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             }
             
             
-
+            //Code Motion
             for (BasicBlock* BB : LL->getBlocks()) {
                 for (Instruction& I : *BB) {
-                    if ((invariantSet.count(&I)>0) && (dominatesExits(&I, LL, DT) || isDeadAfterLoop(&I, LL))) {
+                    if ((invariantSet.count(&I)>0) && (dominatesExits(&I, LL, DT) /*|| isDeadAfterLoop(&I, LL)*/)) {
                         toMove.push_back(&I);
                     }
                 }
             }
+
 
             if(DEBUG){
                 outs() << "Loop Invariant Instructions" << "\n";
