@@ -3,6 +3,7 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include <algorithm>
 #include <llvm-19/llvm/IR/Analysis.h>
 
 #include <llvm-19/llvm/IR/BasicBlock.h>
@@ -15,6 +16,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 
+#include <unordered_map>
 #include <unordered_set>
 #include <map>
 #include <vector>
@@ -35,7 +37,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
      * @return true 
      * @return false 
      */
-    /*bool isDeadAfterLoop(Instruction* I, Loop* LL) {
+    bool isDeadAfterLoop(Instruction* I, Loop* LL) {
         for (User* U : I->users()) {
             Instruction* userInst = cast<Instruction>(U);
             BasicBlock* userBB = userInst->getParent();
@@ -49,7 +51,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
         //E" morta
         return true;
-    }*/
+    }
 
     /**
      * @brief checks that the instruction is in a block that dominates every loop's exit
@@ -86,7 +88,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             
             std::unordered_set<Instruction*> invariantSet;
             std::vector<Instruction*> toMove;
-            std::unordered_set<Instruction*> movedSet;
 
             bool changed = true;
             while (changed) {
@@ -94,7 +95,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                 
                 //Loop Invariant
                 for (BasicBlock *BB : LL->getBlocks()) {
-                    for (Instruction &I : *BB) {
+                    for (Instruction& I : *BB) {
                         if (!isSafeToSpeculativelyExecute(&I)) continue;
 
                         if (I.getOpcode() == Instruction::PHI || invariantSet.count(&I) > 0) 
@@ -105,9 +106,9 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                         for (Use &Op : I.operands()) {
                             Value *operandValue = Op.get();
                             
-                            if (auto *op_instr = dyn_cast<Instruction>(operandValue)) {
 
-                                if (LL->contains(op_instr->getParent()) && invariantSet.count(op_instr) == 0) {
+                            if (auto *op_instr = dyn_cast<Instruction>(operandValue)) {
+                                if (LL->contains(op_instr->getParent()) && invariantSet.count(op_instr) == 0){
                                     isInvariant = false;
                                     break;
                                 }
@@ -124,14 +125,38 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             
             
             //Code Motion
+            std::unordered_set<Instruction*> isMoved;
+        
+            //LL->getBlocks() gives us a list in dfs order
             for (BasicBlock* BB : LL->getBlocks()) {
                 for (Instruction& I : *BB) {
-                    if ((invariantSet.count(&I)>0) && (dominatesExits(&I, LL, DT) /*|| isDeadAfterLoop(&I, LL)*/)) {
-                        toMove.push_back(&I);
+                    
+                    if (invariantSet.count(&I) > 0 && (dominatesExits(&I, LL, DT) || isDeadAfterLoop(&I, LL))) {
+                        bool depsMoved = true;
+                        for (Use &Op : I.operands()) {
+                            if (auto *op_instr = dyn_cast<Instruction>(Op.get())) {
+                                if (LL->contains(op_instr->getParent()) && isMoved.count(op_instr) == 0) {
+                                    depsMoved = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (depsMoved) {
+                            toMove.push_back(&I);
+                            isMoved.insert(&I);   
+                        }
                     }
                 }
             }
 
+            auto preheader = LL->getLoopPreheader();
+            auto lastInstr = preheader->getTerminator();
+
+            for(auto instr : toMove){
+                instr->moveBefore(lastInstr);
+                modified = true;
+            }
 
             if(DEBUG){
                 outs() << "Loop Invariant Instructions" << "\n";
@@ -146,15 +171,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                     outs() << "\n";
                 }
             }
-
-            auto preheader = LL->getLoopPreheader();
-            auto lastInstr = preheader->getTerminator();
-
-            for(auto instr : toMove){
-                instr->moveBefore(lastInstr);
-                modified = true;
-            }
-
         }
           
         if(modified)

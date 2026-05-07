@@ -7,7 +7,7 @@ void fun(int n, int m){
     int y;
 
     for(int i=0;i<n;i++){
-        int a = b+c;
+        int a = b+c; //loop invariant
 
         if(a<=10){
             e = 2;
@@ -15,12 +15,9 @@ void fun(int n, int m){
         else {
             e = 3;
         }
-
-        //we check that the instructions are moved out of the loop they're invariant in and not just every loop
-        //x should be moved outside both fors and y only outside the second for
         for(int j=0; j < m; ++j) {
-            int x = a + 3;
-            y = i + x;
+            int x = a + 3; //outer loop invariant
+            y = i + x; //inner loop invariant
 
             int z = j + 2;
         }
