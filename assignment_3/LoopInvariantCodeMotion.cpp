@@ -79,6 +79,20 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         return dominates;
     }
 
+    void printDebug(std::unordered_set<Instruction*>& invariantInstrs, std::vector<Instruction*>& motionInstrs){
+        outs() << "Loop Invariant Instructions" << "\n";
+        for (auto instr : invariantInstrs) {
+            instr->print(outs());
+            outs() << "\n";
+        }
+            
+        outs() << "Code Motion Instructions" << "\n";
+        for (auto instr : motionInstrs) {
+            instr->print(outs());
+            outs() << "\n";
+        }
+    }
+
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
 
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
@@ -155,17 +169,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             }
 
             if(DEBUG){
-                outs() << "Loop Invariant Instructions" << "\n";
-                for (auto instr : invariantSet) {
-                    instr->print(outs());
-                    outs() << "\n";
-                }
-            
-                outs() << "Code Motion Instructions" << "\n";
-                for (auto instr : toMove) {
-                    instr->print(outs());
-                    outs() << "\n";
-                }
+                printDebug(invariantSet, toMove);
             }
         }
           
