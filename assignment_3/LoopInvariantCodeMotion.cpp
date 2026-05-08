@@ -15,6 +15,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/Analysis/LoopIterator.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -89,46 +90,41 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             std::unordered_set<Instruction*> invariantSet;
             std::vector<Instruction*> toMove;
 
-            bool changed = true;
-            while (changed) {
-                changed = false;
-                
-                //Loop Invariant
-                for (BasicBlock *BB : LL->getBlocks()) {
-                    for (Instruction& I : *BB) {
-                        if (!isSafeToSpeculativelyExecute(&I)) continue;
+            LoopBlocksRPO LBRPO(LL);
+            LBRPO.perform(&LI);
 
-                        if (I.getOpcode() == Instruction::PHI || invariantSet.count(&I) > 0) 
-                            continue;
+            // Loop Invariant
+            for (BasicBlock *BB : LBRPO) {
+                for (Instruction& I : *BB) {
+                    if (!isSafeToSpeculativelyExecute(&I)) continue;
 
-                        bool isInvariant = true;
+                    if (I.getOpcode() == Instruction::PHI) continue;
+
+                    bool isInvariant = true;
+                    
+                    for (Use &Op : I.operands()) {
+                        Value *operandValue = Op.get();
                         
-                        for (Use &Op : I.operands()) {
-                            Value *operandValue = Op.get();
-                            
-
-                            if (auto *op_instr = dyn_cast<Instruction>(operandValue)) {
-                                if (LL->contains(op_instr->getParent()) && invariantSet.count(op_instr) == 0){
-                                    isInvariant = false;
-                                    break;
-                                }
+                        if (auto *op_instr = dyn_cast<Instruction>(operandValue)) {
+                            // Grazie alla RPO, se op_instr è invariante, 
+                            // è GARANTITO che sia già dentro invariantSet.
+                            if (LL->contains(op_instr->getParent()) && invariantSet.count(op_instr) == 0){
+                                isInvariant = false;
+                                break;
                             }
                         }
+                    }
 
-                        if (isInvariant) {
-                            invariantSet.insert(&I);
-                            changed = true;
-                        }
+                    if (isInvariant) {
+                        invariantSet.insert(&I);
                     }
                 }
             }
             
-            
-            //Code Motion
+            // Code Motion
             std::unordered_set<Instruction*> isMoved;
-        
-            //LL->getBlocks() gives us a list in dfs order
-            for (BasicBlock* BB : LL->getBlocks()) {
+            
+            for (BasicBlock* BB : LBRPO) { // Uso LBRPO anche qui!
                 for (Instruction& I : *BB) {
                     
                     if (invariantSet.count(&I) > 0 && (dominatesExits(&I, LL, DT) || isDeadAfterLoop(&I, LL))) {
