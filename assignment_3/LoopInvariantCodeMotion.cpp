@@ -45,12 +45,10 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 
 
             if (!LL->contains(userBB)) {
-                // non e' morta
                 return false;
             }
         }
 
-        //E" morta
         return true;
     }
 
@@ -120,8 +118,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
                         Value *operandValue = Op.get();
                         
                         if (auto *op_instr = dyn_cast<Instruction>(operandValue)) {
-                            // Grazie alla RPO, se op_instr è invariante, 
-                            // è GARANTITO che sia già dentro invariantSet.
                             if (LL->contains(op_instr->getParent()) && invariantSet.count(op_instr) == 0){
                                 isInvariant = false;
                                 break;
@@ -138,7 +134,7 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
             // Code Motion
             std::unordered_set<Instruction*> isMoved;
             
-            for (BasicBlock* BB : LBRPO) { // Uso LBRPO anche qui!
+            for (BasicBlock* BB : LBRPO) {
                 for (Instruction& I : *BB) {
                     
                     if (invariantSet.count(&I) > 0 && (dominatesExits(&I, LL, DT) || isDeadAfterLoop(&I, LL))) {
@@ -185,9 +181,6 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
 }; 
 }
 
-//-----------------------------------------------------------------------------
-// New PM Registration
-//-----------------------------------------------------------------------------
 llvm::PassPluginLibraryInfo getLoopPassPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "LoopInvariantCodeMotion", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {

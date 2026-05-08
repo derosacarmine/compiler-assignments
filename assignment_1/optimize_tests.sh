@@ -23,11 +23,8 @@ done
 
 shift $((OPTIND-1))
 
-# 1. Normalizzazione: uniamo tutto e sostituiamo eventuali virgole con spazi
-# Questo permette all'utente di scrivere sia "pass1 pass2" che "pass1,pass2"
 INPUT_ARGS=$(echo "$*" | tr ',' ' ')
 
-# 2. Validazione dei passaggi
 VALIDATED_PASSES=()
 for arg in $INPUT_ARGS; do
     is_valid=false
@@ -45,16 +42,13 @@ for arg in $INPUT_ARGS; do
     fi
 done
 
-# Controllo se è stato inserito almeno un passaggio
 if [ ${#VALIDATED_PASSES[@]} -eq 0 ]; then
     echo "Error: No optimization specified."
     usage
 fi
 
-# 3. Creazione della stringa per opt (unisce con le virgole)
 PASS_STRING=$(IFS=,; echo "${VALIDATED_PASSES[*]}")
 
-# Controlli percorsi
 if [ -z "$TEST_DIR" ] || [ -z "$PLUGIN_PATH" ]; then
     echo "Error: Missing parameters."
     usage
@@ -76,7 +70,6 @@ for cpp_file in "$TEST_DIR"/*.cpp; do
     
     echo "Processing: $filename"
 
-    # Compilazione
     if ! clang++ -S -emit-llvm -O0 -Xclang -disable-O0-optnone "$cpp_file" -o "$LL_DIR/$filename.ll"; then
         echo "   [ERROR] failed compilation for file: $filename"
         continue

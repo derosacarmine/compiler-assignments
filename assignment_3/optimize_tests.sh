@@ -20,7 +20,6 @@ done
 
 shift $((OPTIND-1))
 
-#INPUT_ARGS=$(echo "$*" | tr ',' ' ')
 
 if [ -z "$TEST_DIR" ] || [ -z "$PLUGIN_PATH" ]; then
     echo "Error: Missing parameters."

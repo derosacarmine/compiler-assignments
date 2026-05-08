@@ -39,7 +39,7 @@ this will create a "doc" directory with the various files in html and latex
 
 ## Code Explanation
 
-This is an **LLVM compiler plugin** that implements two optimization passes operating on LLVM's Intermediate Representation (IR).
+This is an **LLVM compiler plugin** that implements three optimization passes operating on LLVM's Intermediate Representation (IR).
 
 ---
 
