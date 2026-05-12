@@ -77,6 +77,12 @@ struct LoopInvariantCodeMotion : PassInfoMixin<LoopInvariantCodeMotion> {
         return dominates;
     }
 
+    /**
+     * @brief debug printing for each loop, reporting loop invariant and moved instructions
+     * 
+     * @param invariantInstrs 
+     * @param motionInstrs 
+     */
     void printDebug(std::unordered_set<Instruction*>& invariantInstrs, std::vector<Instruction*>& motionInstrs){
         outs() << "Loop Invariant Instructions" << "\n";
         for (auto instr : invariantInstrs) {
