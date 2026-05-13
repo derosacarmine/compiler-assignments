@@ -18,6 +18,8 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -49,6 +51,50 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     // }
 
     /**
+     * @brief checks if two loops are adjacent by checking that there are no
+     * other basic blocks between the two loops, or in other words that the 
+     * exit block of the first loop coincides with the preheader block of
+     * the second loop
+     * 
+     * @param L1 
+     * @param L2 
+     * @return true 
+     * @return false 
+     */
+    bool areAdjacent(Loop *L1, Loop *L2) {
+        // need to check if each condition works or if there are any missing or what
+        if (BranchInst *GuardBranchL1 = L1->getLoopGuardBranch()) {
+            BasicBlock *ExitIfFalse = GuardBranchL1->getSuccessor(1); 
+
+            BasicBlock *EntryL2 = L2->getLoopGuardBranch() ? 
+                                L2->getLoopGuardBranch()->getParent() : 
+                                L2->getLoopPreheader();
+
+            return ExitIfFalse != nullptr && ExitIfFalse == EntryL2;
+        }
+
+        BasicBlock *ExitL1 = L1->getExitBlock();
+        BasicBlock *EntryL2 = L2->getLoopGuardBranch() ? 
+                            L2->getLoopGuardBranch()->getParent() : 
+                            L2->getLoopPreheader();
+
+        return ExitL1 != nullptr && ExitL1 == EntryL2;
+    }
+
+    /**
+     * @brief checks if two loops iterate the same number of times
+     * 
+     * @param L1 
+     * @param L2 
+     * @return true 
+     * @return false 
+     */
+    bool hasSameTripCout(Loop *L1, Loop *L2) {
+        // check how to use ScalarEvolutionAnalysis to do ts
+        return nullptr;
+    }
+
+    /**
      * @brief Check if two loops are control flow equivalent (CFE)
      * 
      * @param L1 first loop
@@ -69,8 +115,25 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
         return DT.dominates(Pre1, Pre2) && PDT.dominates(Pre2, Pre1);
     }
+
+    /**
+     * @brief checks that there are no negative distance dependencies
+     * between two loops, or in other words L2 can't have an instruction
+     * at iteration m that uses a value computed by L1 at a future
+     * iteration m+n (where n > 0) 
+     * 
+     * @param L1 
+     * @param L2 
+     * @return true 
+     * @return false 
+     */
+    bool hasNegativeDependencies(Loop *L1, Loop *L2) {
+        // auto dep = DI.depends(&I0, &I1, true);
+        // if (!DepResult) // not dependent
+        return nullptr;
+    }
     
-    void processNestLevelLoops(std::vector<Loop*> &siblings, DominatorTree &DT, PostDominatorTree &PDT) {
+    void processNestLevelLoops(std::vector<Loop*> &siblings, ScalarEvolution &SE, DominatorTree &DT, PostDominatorTree &PDT, DependenceInfo &DI) {
         std::vector<Loop*> candidateLoops;
     
         //filtering loops that are not candidate for LF
@@ -89,6 +152,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
                 bool addedToGroup = false;
 
                 for (auto &group : cfeGroups) {
+                    // does this if check through each condition or is it only for the CF equivalence?
                     if (areControlFlowEquivalent(group.front(), loop, DT, PDT)) {
                         group.push_back(loop);
                         addedToGroup = true;
@@ -123,12 +187,16 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
         LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-        auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-        auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
+        ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+
+        DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
+        PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+
+        DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
 
         //getTopLevelLoops() iterates from the last loop to the first
-        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT);
+        processNestLevelLoops(LI.getTopLevelLoopsVector(), SE, DT, PDT, DI);
         
         return PreservedAnalyses::all();
     }
