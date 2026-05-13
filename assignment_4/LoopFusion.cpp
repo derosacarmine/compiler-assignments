@@ -50,21 +50,50 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     //     }
     // }
 
-    BasicBlock* getBlockToCheck(Loop &L) {
-        return L.isGuarded() ? L.getLoopGuardBranch()->getParent : L.getLoopPreheader;
+    BasicBlock* getLoopEntry(Loop* L) {
+        return L->isGuarded() ? L->getLoopGuardBranch()->getParent() : L->getLoopPreheader();
+    }
+
+    BasicBlock* getLoopExit(Loop* L) {
+        if (L->isGuarded()) {
+            BranchInst *GuardBr = L->getLoopGuardBranch();
+            BasicBlock *Preheader = L->getLoopPreheader();
+            
+            // checks both successors of the guard block, one should be the preheader of the loop while the other is the exit block.
+            if (GuardBr->getSuccessor(0) == Preheader) {
+                return GuardBr->getSuccessor(1);
+            } else {
+                return GuardBr->getSuccessor(0);
+            }
+        }
+        
+        return L->getExitBlock();
     }
 
     bool areConditionsEquivalent(BranchInst *l1GuardCond, BranchInst *l2GuardCond) {
-        CmpInst *l1CmpInst = dyn_cast<CmpInst>(l1GuardCond->getCondition());
-        CmpInst *l2CmpInst = dyn_cast<CmpInst>(l2GuardCond->getCondition());
+        // CmpInst *l1CmpInst = dyn_cast<CmpInst>(l1GuardCond->getCondition());
+        // CmpInst *l2CmpInst = dyn_cast<CmpInst>(l2GuardCond->getCondition());
 
-        return l1CmpInst->isIdenticalTo(l2CmpInst);
+        // more memory safe
+        Value *Cond1 = l1GuardCond->getCondition();
+        Value *Cond2 = l2GuardCond->getCondition();
+
+        //in case they share the same variable
+        if (Cond1 == Cond2) return true;
+
+        if (auto *Inst1 = dyn_cast<Instruction>(Cond1)) {
+            if (auto *Inst2 = dyn_cast<Instruction>(Cond2)) {
+                return Inst1->isIdenticalTo(Inst2);
+            }
+        }
+
+        return false;
     }
 
     /**
      * @brief checks if two loops are adjacent by checking that there are no
      * other basic blocks between the two loops, or in other words that the 
-     * exit block of the first loop coincides with the preheader block of
+     * exit block of the first loop coincides with the entry block of
      * the second loop
      * 
      * @param L1 
@@ -73,17 +102,20 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      * @return false 
      */
     bool areAdjacent(Loop *L1, Loop *L2) {
-        BasicBlock *L1Exit = nullptr;
-        BasicBlock *L2Entry = getBlockToCheck(L2);
+        BasicBlock *ExitL1 = getLoopExit(L1);
+        BasicBlock *EntryL2 = getLoopEntry(L2);
+        bool conditionEquivalent = true;
+
+        if (!ExitL1 || !EntryL2) return false;
+
+        if (L1->isGuarded() != L2->isGuarded()) return false; // apparently guarded loops can't be fused with guarded ones, well too bad
+                                                            // (cases like if(...) { for(...) for(...) } will are considered two unguarded loops)
         
-        if (L1.isGuarded) {
-            if (L2.isGuarded && 
-                !areConditionsEquivalent(L1.getLoopGuardBranch(), 
-                                                        L2.getLoopGuardBranch())) return false;
-            L1Exit = dyn_cast<BasicBlock>(L1.getLoopGuardBranch()->getOperand(1));
-        } else {
-            L1Exit = L1.getExitBlock();
+        if(L1->isGuarded()){
+            conditionEquivalent = areConditionsEquivalent(L1->getLoopGuardBranch(), L2->getLoopGuardBranch());
         }
+
+        return (ExitL1 == EntryL2) && conditionEquivalent;
     }
 
     /**
@@ -95,11 +127,14 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      * @return false 
      */
     bool hasSameTripCount(Loop *L1, Loop *L2, ScalarEvolution &SE) {
-        // TODO: do we want to use getSmasslConstantTripCount or getBackedgeTakenCount ?
-        const SCEV *TC1 = SE.getSmallConstantTripCount(&L1);
-        const SCEV *TC2 = SE.getSmallConstantTripCount(L2);
+        // TODO: do we want to use getSmasslConstantTripCount or getBackedgeTakenCount ? getBackedgeTakenCount works with variables while the other doesn't
+        const SCEV *TC1 = SE.getBackedgeTakenCount(L1);
+        const SCEV *TC2 = SE.getBackedgeTakenCount(L2);
 
-        return (TC1 == TC2) && (TC1 != 0);
+        if (isa<SCEVCouldNotCompute>(TC1) || isa<SCEVCouldNotCompute>(TC2))
+            return false;
+
+        return TC1 == TC2;
     }
 
     /**
@@ -114,11 +149,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      */
 
     bool areControlFlowEquivalent(Loop *L1, Loop *L2, DominatorTree &DT, PostDominatorTree &PDT) {
-        // TODO: we may need to add a different check for when both loops are guarded
-        // also check that the code below is fine, are should we use getLoopHeader instead of Preheader?
+        // TODO: we may need to add a different check for when both loops are guarded -> this could be right
         
-        BasicBlock *Pre1 = L1->getLoopPreheader();
-        BasicBlock *Pre2 = L2->getLoopPreheader();
+        // BasicBlock *Pre1 = L1->getLoopPreheader();
+        // BasicBlock *Pre2 = L2->getLoopPreheader();
+
+        auto Pre1 = getLoopEntry(L1);
+        auto Pre2 = getLoopEntry(L2);
 
         if (!Pre1 || !Pre2) {
             return false;
@@ -138,8 +175,9 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      * @return true 
      * @return false 
      */
-    bool hasNegativeDependencies(Loop *L1, Loop *L2) {
+    bool hasNegativeDependencies(Loop *L1, Loop *L2, DependenceInfo &DI) {
         // TODO: I'm not even gonna read big dawg's code for ts, I'mma just hope ts works well enough :pray:
+        // I've added a function for scalar dependencies, but i'm still unsure if it should be used here
 
         // save operations that can change memory in some way to vectors
         std::vector<Instruction*> opsL1, opsL2;
@@ -160,23 +198,47 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         for (Instruction *I1 : opsL1) {
             for (Instruction *I2 : opsL2) {
                 // checks if there's a negative distance dependency between the first and second loops
-                auto dep = DI.depends(&I1, &I2, true);
+                auto dep = DI.depends(I1, I2, true);
                 if (!dep) continue;
 
                 // if there's a conflict and the use of the instruction in L2
                 // preceeds the use in L1 (checked with getDirection and GT (greater than))
                 // then we return true (as in it's true that there's a negative distance dependency and the loops can't be fused)
-                if (dep->isConflicting()) {
-                    if (dep->getDirection(1) == Dependence::DVEntry::GT) {
-                        return true;
-                    }
+                //if (dep->isConflicting()) { isConflicting doesn't exist ??
+                if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+                    return true;
                 }
+                //}
             }
         }
 
         return false;
     }
     
+    /**
+     * @brief checks for scalar dependencies between two loops
+     * 
+     * @param L1 
+     * @param L2 
+     * @return true 
+     * @return false 
+     */
+    bool hasScalarDependencies(Loop *L1, Loop *L2) {
+        for (BasicBlock *BB : L1->getBlocks()) {
+            for (Instruction &I : *BB) {
+                for (User *U : I.users()) {
+                    if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
+                        
+                        if (L2->contains(UserInst->getParent())) {
+                            return true; 
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     void processNestLevelLoops(std::vector<Loop*> &siblings, ScalarEvolution &SE, DominatorTree &DT, PostDominatorTree &PDT, DependenceInfo &DI) {
         std::vector<Loop*> candidateLoops;
     
@@ -198,20 +260,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
                 for (auto &group : cfeGroups) {
                     // TODO: does this if check through each condition or is it only for the CF equivalence?
                     if (areControlFlowEquivalent(group.front(), loop, DT, PDT)) {
-
-                        /*
-                        for (size_t i = 0; i < group.size() - 1; ++i) {
-                            Loop *L1 = group[i];
-                            Loop *L2 = group[i+1];
-
-                            if (!areAdjacent(L1, L2) || 
-                                !hasSameTripCount(L1, L2, SE) || 
-                                hasNegativeDependencies(L1, L2, DI)) continue;
-
-                            //fuse loops L1 and L2; 
-                        }
-                        */
-
                         group.push_back(loop);
                         addedToGroup = true;
                         break;
@@ -224,14 +272,16 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
             }
 
-            //debug output
-            for (auto& group : cfeGroups) {
-                if (group.size() >= 2) {
-                    outs() << "found CFE with size " << group.size() << "\n";
-                }
+            
+            
+        }
+
+        //debug output
+        for (auto& group : cfeGroups) {
+            if (group.size() >= 2) {
+                outs() << "found CFE with size " << group.size() << "\n";
             }
         }
-        
 
         // TODO: do checks for each pair of loops in each group (groups of only one loop are excluded) and fuse if possible
 
@@ -239,7 +289,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         for (Loop* L : siblings) {
             std::vector<Loop*> children = L->getSubLoopsVector();
             if(children.size()>=2)
-                processNestLevelLoops(children, DT, PDT);
+                processNestLevelLoops(children, SE, DT, PDT, DI);
         }
     }
 
