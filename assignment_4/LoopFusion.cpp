@@ -89,9 +89,16 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      * @return true 
      * @return false 
      */
-    bool hasSameTripCout(Loop *L1, Loop *L2) {
-        // check how to use ScalarEvolutionAnalysis to do ts
-        return nullptr;
+    bool hasSameTripCount(Loop *L1, Loop *L2, ScalarEvolution &SE) {
+        const SCEV *TC1 = SE.getBackedgeTakenCount(L1);
+        const SCEV *TC2 = SE.getBackedgeTakenCount(L2);
+
+        // checks if the number of times either loop iterates is too great or complex
+        // and thus could not be computed
+        if (isa<SCEVCouldNotCompute>(TC1) || isa<SCEVCouldNotCompute>(TC2))
+            return false;
+
+        return TC1 == TC2;
     }
 
     /**
@@ -128,9 +135,40 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
      * @return false 
      */
     bool hasNegativeDependencies(Loop *L1, Loop *L2) {
-        // auto dep = DI.depends(&I0, &I1, true);
-        // if (!DepResult) // not dependent
-        return nullptr;
+        // save operations that can change memory in some way to vectors
+        std::vector<Instruction*> opsL1, opsL2;
+
+        for (BasicBlock *BB : L1->getBlocks()) {
+            for (Instruction &I : *BB)
+                if (I.mayReadOrWriteMemory()) opsL1.push_back(&I);
+        }
+
+        for (BasicBlock *BB : L2->getBlocks()) {
+            for (Instruction &I : *BB)
+                if (I.mayReadOrWriteMemory()) opsL2.push_back(&I);
+        }
+
+        // if the vectors end up empty we can return without doing any check
+        if (opsL1.empty() || opsL2.empty()) return false;
+
+        for (Instruction *I1 : opsL1) {
+            for (Instruction *I2 : opsL2) {
+                // checks if there's a negative distance dependency between the first and second loops
+                auto dep = DI.depends(&I1, &I2, true);
+                if (!dep) continue;
+
+                // if there's a confligt and the use of the instruction in L2
+                // preceeds the use in L1 (checked with getDirection and GT (greater than))
+                // then we return true (as in it's true that there's a negative distance dependency and the loops can't be fused)
+                if (dep->isConflicting()) {
+                    if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
     
     void processNestLevelLoops(std::vector<Loop*> &siblings, ScalarEvolution &SE, DominatorTree &DT, PostDominatorTree &PDT, DependenceInfo &DI) {
@@ -154,6 +192,20 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
                 for (auto &group : cfeGroups) {
                     // does this if check through each condition or is it only for the CF equivalence?
                     if (areControlFlowEquivalent(group.front(), loop, DT, PDT)) {
+
+                        /*
+                        for (size_t i = 0; i < group.size() - 1; ++i) {
+                            Loop *L1 = group[i];
+                            Loop *L2 = group[i+1];
+
+                            if (!areAdjacent(L1, L2) || 
+                                !hasSameTripCount(L1, L2, SE) || 
+                                hasNegativeDependencies(L1, L2, DI)) continue;
+
+                            //fuse loops L1 and L2; 
+                        }
+                        */
+
                         group.push_back(loop);
                         addedToGroup = true;
                         break;
