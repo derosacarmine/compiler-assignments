@@ -108,7 +108,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
         if (!ExitL1 || !EntryL2) return false;
 
-        if (L1->isGuarded() != L2->isGuarded()) return false; // apparently guarded loops can't be fused with guarded ones, well too bad
+        if (L1->isGuarded() != L2->isGuarded()) return false; // apparently unguarded loops can't be fused with guarded ones, well too bad
                                                             // (cases like if(...) { for(...) for(...) } will are considered two unguarded loops)
         
         if(L1->isGuarded()){
@@ -258,7 +258,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
                 bool addedToGroup = false;
 
                 for (auto &group : cfeGroups) {
-                    // TODO: does this if check through each condition or is it only for the CF equivalence?
                     if (areControlFlowEquivalent(group.front(), loop, DT, PDT)) {
                         group.push_back(loop);
                         addedToGroup = true;
