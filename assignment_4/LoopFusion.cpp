@@ -520,9 +520,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
-    // nel loop di fusione, salva i cancellati
-    std::unordered_set<Loop *> erasedLoops;
-
     for (auto &group : cfeGroups) {
       int baseIndex = 0;
       auto &baseLoop = group[baseIndex];
@@ -561,8 +558,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
         if (fuseLoops(baseLoop, nextLoop, SE, LI)) {
           outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
-
-          erasedLoops.insert(nextLoop); 
 
           group.erase(group.begin() + baseIndex + 1);
           changed = true;
