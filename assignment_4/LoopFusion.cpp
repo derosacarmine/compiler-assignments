@@ -38,6 +38,8 @@ namespace {
 
 struct LoopFusion : PassInfoMixin<LoopFusion> {
 
+  std::map<Loop *, const SCEV *> loopsTripCountMap;
+
   /**
    * @brief collects the loops present at each nest level that are candidates
    * for loop fusion
@@ -144,12 +146,9 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return true
    * @return false
    */
-  bool hasSameTripCount(Loop *L1, Loop *L2, ScalarEvolution &SE) {
-    // TODO: do we want to use getSmasslConstantTripCount or
-    // getBackedgeTakenCount ? getBackedgeTakenCount works with variables while
-    // the other doesn't
-    const SCEV *TC1 = SE.getBackedgeTakenCount(L1);
-    const SCEV *TC2 = SE.getBackedgeTakenCount(L2);
+  bool hasSameTripCount(Loop *L1, Loop *L2) {
+    const SCEV *TC1 = loopsTripCountMap[L1];
+    const SCEV *TC2 = loopsTripCountMap[L2];
 
     if (isa<SCEVCouldNotCompute>(TC1) || isa<SCEVCouldNotCompute>(TC2)) {
       outs() << "couldnt compute\n";
@@ -314,7 +313,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return nullptr;
   }
 
-  bool fuseLoops(Loop *L1, Loop *L2, ScalarEvolution &SE, LoopInfo &LI) {
+  bool fuseLoops(Loop *L1, Loop *L2, LoopInfo &LI) {
     auto L1Header = L1->getHeader();
     auto L1HeaderTerminator = L1Header->getTerminator();
     // auto L1InductionVar = L1->getInductionVariable(SE); for some reason it
@@ -420,14 +419,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    if (Loop *ParentLoop = L2->getParentLoop())
+      ParentLoop->removeChildLoop(L2);
+
     LI.erase(L2);
     return true;
   }
-  void processNestLevelLoops(std::vector<Loop *> &siblings, ScalarEvolution &SE,
-                             DominatorTree &DT, PostDominatorTree &PDT,
-                             DependenceInfo &DI, LoopInfo &LI, Function &F) {
+  bool processNestLevelLoops(std::vector<Loop *> &siblings, DominatorTree &DT,
+                             PostDominatorTree &PDT, DependenceInfo &DI,
+                             LoopInfo &LI, Function &F) {
     std::vector<Loop *> candidateLoops;
-    bool changed = false;
+    bool fused = false;
 
     // filtering loops that are not candidate for LF
     for (Loop *L : siblings) {
@@ -483,7 +485,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           continue;
         }
 
-        if (!hasSameTripCount(baseLoop, nextLoop, SE)) {
+        if (!hasSameTripCount(baseLoop, nextLoop)) {
           outs() << " -> FALLITO: Trip count diverso o SCEVCouldNotCompute\n";
           baseIndex++;
           baseLoop = group[baseIndex];
@@ -505,10 +507,10 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         }
 
         outs() << " -> Tutti i check passati! Tento la fusione...\n";
-        if (fuseLoops(baseLoop, nextLoop, SE, LI)) {
+        if (fuseLoops(baseLoop, nextLoop, LI)) {
           outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
           group.erase(group.begin() + baseIndex + 1);
-          changed = true;
+          fused = true;
           removeUnreachableBlocks(F);
 
           siblings.erase(
@@ -517,7 +519,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
           DT.recalculate(F);
           PDT.recalculate(F);
-          SE.forgetAllLoops();
+          // SE.forgetAllLoops();
         } else {
           outs() << " -> FUSIONE ABORTITA: Induction variable non trovata in "
                     "fase di fusione.\n";
@@ -538,10 +540,15 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     //   SE.forgetAllLoops();
     // }
 
+    bool childrenFused = false;
     for (Loop *L : siblings) {
       std::vector<Loop *> children = L->getSubLoopsVector();
-      processNestLevelLoops(children, SE, DT, PDT, DI, LI, F);
+      if (processNestLevelLoops(children, DT, PDT, DI, LI, F)) {
+        childrenFused = true;
+      }
     }
+
+    return fused || childrenFused;
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
@@ -554,10 +561,16 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
 
-    // getTopLevelLoops() iterates from the last loop to the first
-    processNestLevelLoops(LI.getTopLevelLoopsVector(), SE, DT, PDT, DI, LI, F);
+    for (auto L : LI.getLoopsInPreorder()) {
+      auto backedgeLoop = SE.getBackedgeTakenCount(L);
+      loopsTripCountMap[L] = backedgeLoop;
+    }
 
-    return PreservedAnalyses::none();
+    // getTopLevelLoops() iterates from the last loop to the first
+    bool changed =
+        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+
+    return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }
 
   static bool isRequired() { return true; }
