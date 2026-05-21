@@ -122,20 +122,35 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (!ExitL1 || !EntryL2)
       return false;
 
-    if (ExitL1 == EntryL2)
+    if (ExitL1 == EntryL2) {
+      BranchInst *BI = dyn_cast<BranchInst>(ExitL1->getTerminator());
+
+      if (!BI || !BI->isUnconditional()) return false;
+
+      if (ExitL1->getFirstNonPHIOrDbg() != BI) {
+        outs() << " -> ERROR: there are instructions between the loops.\n";
+        return false;
+      }
+
       return true;
+    }
 
     // should make sure that two loops are considered adjacent even with a
     // "trampoline" block in the middle
-    if (BranchInst *BI = dyn_cast<BranchInst>(ExitL1->getTerminator())) {
-      if (BI->isUnconditional() && BI->getSuccessor(0) == EntryL2) {
-        if (ExitL1->getFirstNonPHI() == BI) {
-          return true;
-        }
-      }
+    BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
+    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
+
+    if (!BI1 || !BI2) return false;
+
+    if (!BI1->isUnconditional() || BI1->getSuccessor(0) != EntryL2 || !BI2->isUnconditional())
+      return false;
+
+    if (ExitL1->getFirstNonPHIOrDbg() != BI1 || EntryL2->getFirstNonPHIOrDbg() != BI2) {
+      outs() << " -> ERROR: there are instructions between the loops.\n";
+      return false;
     }
 
-    return false;
+    return true;
   }
 
   /**
@@ -529,6 +544,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    //TODO: vhat is ts commend bradar delet ts
     // TODO: do checks for each pair of loops in each group (groups of only one
     // loop are excluded) and fuse if possible
 
@@ -567,8 +583,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     // getTopLevelLoops() iterates from the last loop to the first
-    bool changed =
-        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+    bool changed = processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
 
     return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }
