@@ -420,10 +420,14 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    if (Loop *ParentLoop = L2->getParentLoop())
+      ParentLoop->removeChildLoop(L2);
+
     LI.erase(L2);
     return true;
   }
-  void processNestLevelLoops(std::vector<Loop *> &siblings, ScalarEvolution &SE,
+  
+  bool processNestLevelLoops(std::vector<Loop *> &siblings, ScalarEvolution &SE,
                              DominatorTree &DT, PostDominatorTree &PDT,
                              DependenceInfo &DI, LoopInfo &LI, Function &F) {
     std::vector<Loop *> candidateLoops;
@@ -507,6 +511,10 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         outs() << " -> Tutti i check passati! Tento la fusione...\n";
         if (fuseLoops(baseLoop, nextLoop, SE, LI)) {
           outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
+
+          /* TODO: check if all of this is actually needed or we can just return
+          //and call processNestLevelLoops again, as our best friend proposed
+
           group.erase(group.begin() + baseIndex + 1);
           changed = true;
           removeUnreachableBlocks(F);
@@ -517,7 +525,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
           DT.recalculate(F);
           PDT.recalculate(F);
+          */
+
           SE.forgetAllLoops();
+          
+          return true;
         } else {
           outs() << " -> FUSIONE ABORTITA: Induction variable non trovata in "
                     "fase di fusione.\n";
@@ -540,11 +552,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     for (Loop *L : siblings) {
       std::vector<Loop *> children = L->getSubLoopsVector();
-      processNestLevelLoops(children, SE, DT, PDT, DI, LI, F);
+      if (processNestLevelLoops(children, SE, DT, PDT, DI, LI, F))
+        return true;
     }
+
+    return false;
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    bool changed = true;
+    bool anyChange = false;
+
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
 
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
@@ -554,10 +572,16 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
 
-    // getTopLevelLoops() iterates from the last loop to the first
-    processNestLevelLoops(LI.getTopLevelLoopsVector(), SE, DT, PDT, DI, LI, F);
+    while (changed) {
+      changed = false;
+      // getTopLevelLoops() iterates from the last loop to the first
+      changed = processNestLevelLoops(LI.getTopLevelLoopsVector(), SE, DT, PDT, DI, LI, F);
+      
+      if (changed)
+        anyChange = true;
+    }
 
-    return PreservedAnalyses::none();
+    return anyChange ? PreservedAnalyses::none() : PreservedAnalyses::all();
   }
 
   static bool isRequired() { return true; }
