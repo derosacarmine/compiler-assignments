@@ -152,21 +152,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     const SCEV *TC2 = SE.getBackedgeTakenCount(L2);
 
     if (isa<SCEVCouldNotCompute>(TC1) || isa<SCEVCouldNotCompute>(TC2)) {
-        outs() << "couldnt compute\n";
-        outs() << "  L1 header: " << L1->getHeader()->getName() << "\n";
-        outs() << "  L2 header: " << L2->getHeader()->getName() << "\n";
-        outs() << "  L1 preheader: ";
-        if (L1->getLoopPreheader()) outs() << L1->getLoopPreheader()->getName();
-        else outs() << "NULL";
-        outs() << "\n  L2 preheader: ";
-        if (L2->getLoopPreheader()) outs() << L2->getLoopPreheader()->getName();
-        else outs() << "NULL\n";
-        outs() << "  TC1: "; TC1->print(outs()); outs() << "\n";
-        outs() << "  TC2: "; TC2->print(outs()); outs() << "\n";
-        return false;
+      outs() << "couldnt compute\n";
+      return false;
     }
-    return TC1 == TC2;
 
+    return TC1 == TC2;
   }
 
   /**
@@ -436,46 +426,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
   void processNestLevelLoops(std::vector<Loop *> &siblings, ScalarEvolution &SE,
                              DominatorTree &DT, PostDominatorTree &PDT,
                              DependenceInfo &DI, LoopInfo &LI, Function &F) {
-
-                              
-                              
-    /*
-    TC2: ***COULDNOTCOMPUTE*** mentre TC1: (0 smax %1) che è corretto (max(0, m)).
-    Il problema è che il secondo loop inner non ha più un preheader valido dopo la fusione degli outer. Tutti i nomi dei basic block sono vuoti 
-    (header: , preheader: ), il che significa che la SE non riesce a risalire alla struttura del loop.
-    Il problema è in fuseLoops: quando sposti i blocchi di L2 dentro L1, il preheader del secondo inner loop (che era il body entry di L2 outer) 
-    ora è raggiungibile dall'interno del loop fuso, ma non più come un preheader "pulito" ->ha più predecessori.
-
-    Quindi faccio bottom up, prima esploro i figli di ogni loop e poi tento la fusione a quel livello, 
-    in questo modo quando arrivo alla fase di fusione i preheader dei loop sono ancora intatti e la 
-    SE riesce a calcolare correttamente i trip count.
-
-    Esempio:
-    Outer L1: for (int i = 0; i < n; i++)   <- primo outer
-      Inner L1: for (int j = 0; j < m; j++) { a = j + i; }
-
-    Outer L2: for (int i = 0; i < n; i++)   <- secondo outer
-      Inner L2: for (int j = 0; j < m; j++) { b = j * i; }
-
-    Quindi con bottom up prima vengono processati gli inner:
-      -> Inner L1 e Inner L2 vengono visti come siblings -> vengono fusi in un unico loop j
-
-      Poi vengono processati gli outer:
-      Outer L1 e Outer L2 vengono visti come siblings -> vengono fusi in un unico loop i
-
-      Il problema di prima con il top down era che il codice processava prima gli outer, fondendoli, e poi cercava di fondere gli inner
-      -> ma a quel punto il preheader del secondo inner loop era stato spostato dentro il loop fuso e la SE non riusciva più a calcolarne il trip count.
-    */
-    // Prima scendi nei figli di ogni loop
-    for (Loop *L : siblings) {
-        std::vector<Loop *> children = L->getSubLoopsVector();
-        if (!children.empty()) {
-            processNestLevelLoops(children, SE, DT, PDT, DI, LI, F);
-        }
-    }
-
-    // POI fai la fusione a questo livello
-
     std::vector<Loop *> candidateLoops;
     bool changed = false;
 
@@ -520,9 +470,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
-    // nel loop di fusione, salva i cancellati
-    std::unordered_set<Loop *> erasedLoops;
-
     for (auto &group : cfeGroups) {
       int baseIndex = 0;
       auto &baseLoop = group[baseIndex];
@@ -558,12 +505,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         }
 
         outs() << " -> Tutti i check passati! Tento la fusione...\n";
-
         if (fuseLoops(baseLoop, nextLoop, SE, LI)) {
           outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
-
-          erasedLoops.insert(nextLoop); 
-
           group.erase(group.begin() + baseIndex + 1);
           changed = true;
           removeUnreachableBlocks(F);
@@ -586,15 +529,19 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     // TODO: do checks for each pair of loops in each group (groups of only one
     // loop are excluded) and fuse if possible
-    
-      // we explore the next nest level for each loop (in case of fusion both the
-    // domTree and LoopAnalysis must be updated)
-      if (changed) {
-        DT.recalculate(F);
-        PDT.recalculate(F);
-        SE.forgetAllLoops();
-    }
 
+    // we explore the next nest level for each loop (in case of fusion both the
+    // domTree and LoopAnalysis must be updated)
+    // if (changed) {
+    //   DT.recalculate(F);
+    //   PDT.recalculate(F);
+    //   SE.forgetAllLoops();
+    // }
+
+    for (Loop *L : siblings) {
+      std::vector<Loop *> children = L->getSubLoopsVector();
+      processNestLevelLoops(children, SE, DT, PDT, DI, LI, F);
+    }
   }
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
