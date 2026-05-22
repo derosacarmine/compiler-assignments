@@ -8,9 +8,7 @@
 #include <llvm-19/llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm-19/llvm/IR/Analysis.h>
 
-#include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
-#include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -26,10 +24,9 @@
 #include <llvm-19/llvm/Support/Casting.h>
 
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/ADT/SetVector.h"
 
 #include <map>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 using namespace llvm;
@@ -104,6 +101,22 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return false;
   }
 
+  bool isDefinedInLoop(Value *V, Loop *L) {
+    if (auto *I = dyn_cast<Instruction>(V))
+      return L->contains(I->getParent());
+    return false;
+  }
+
+  bool isUsedInLoop(Instruction *I, Loop *L) {
+    for (User *U : I->users()) {
+      if (auto *UserInst = dyn_cast<Instruction>(U)) {
+        if (L->contains(UserInst->getParent()))
+          return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * @brief checks if two loops are adjacent by checking that there are no
    * other basic blocks between the two loops, or in other words that the
@@ -122,20 +135,137 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (!ExitL1 || !EntryL2)
       return false;
 
-    if (ExitL1 == EntryL2)
+    // if these two blocks are the same then we only need to check one for non PHI or debug instructions
+    // if there is at least one then we try to move them
+    if (ExitL1 == EntryL2) {
+      BranchInst *BI = dyn_cast<BranchInst>(ExitL1->getTerminator());
+
+      if (!BI || !BI->isUnconditional()) return false;
+
+      if (ExitL1->getFirstNonPHIOrDbg() != BI) {
+        if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI)) {
+        outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
+        return false;
+        }
+      }
+
       return true;
+    }
 
     // should make sure that two loops are considered adjacent even with a
     // "trampoline" block in the middle
-    if (BranchInst *BI = dyn_cast<BranchInst>(ExitL1->getTerminator())) {
-      if (BI->isUnconditional() && BI->getSuccessor(0) == EntryL2) {
-        if (ExitL1->getFirstNonPHI() == BI) {
-          return true;
+    BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
+    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
+
+    if (!BI1 || !BI2) return false;
+
+    // ts /* */ makes the test fail
+    /*BasicBlock *NextBB = BI1->getSuccessor(0);
+    if (NextBB != EntryL2) {
+      BranchInst *NextBI = dyn_cast<BranchInst>(NextBB->getTerminator());
+      if (!NextBI || !NextBI->isUnconditional() || NextBI->getSuccessor(0) != EntryL2)
+        return false;
+    }
+
+    if (!BI1->isUnconditional())
+        return false;*/
+
+    if (ExitL1->getFirstNonPHIOrDbg() != BI1 || EntryL2->getFirstNonPHIOrDbg() != BI2) {
+      if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1, EntryL2, BI2)) {
+        outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool moveInstructionsInBetweenLoops(Loop *L1, Loop *L2, BasicBlock *ExitL1, BranchInst *BI1, BasicBlock *EntryL2 = nullptr, BranchInst *BI2 = nullptr) {
+    SetVector<Instruction*> toMoveBeforeL1;
+    SetVector<Instruction*> toMoveAfterL2;
+
+    std::vector<Instruction*> toCheckForCodeMotion;
+
+    for (Instruction &I : *ExitL1) {
+      if (!isa<PHINode>(&I) && &I != BI1 && !isa<DbgInfoIntrinsic>(&I)) {
+        toCheckForCodeMotion.push_back(&I);
+      }
+    }
+
+    // I don't need to check for EntryL2 != ExitL1 as I do that in areAdjacent before calling
+    // this function, if they're equal then I don't give EntryL2 as a parameter and it will
+    // be nullptr meaning I just need to check that instead (should be equivalent either way)
+    if (EntryL2 != nullptr && EntryL2 != L2->getHeader()) {
+      for (Instruction &I : *EntryL2) {
+        if (!isa<PHINode>(&I) && &I != BI2 && !isa<DbgInfoIntrinsic>(&I)) {
+          toCheckForCodeMotion.push_back(&I);
         }
       }
     }
 
-    return false;
+    // no instructions between loops
+    // truth be told this condition should never be true as we don't even call this function
+    // unless we find an instruction between L1 and L2, so it's more of a precaution in case
+    // that doesn't work for whatever reason, could most likely be safely removed without repercussions
+    //if (toCheckForCodeMotion.empty()) return true;
+
+    for (Instruction *I : toCheckForCodeMotion) {
+      bool neededBeforeL1 = false;
+      bool neededAfterL2 = false;
+
+      // checks if the instruction is needed after L2
+      // if it is then we are forced to move it before L1
+      if (isUsedInLoop(I, L2))
+        neededBeforeL1 = true;
+
+      // checks that the instruction is using something from the previous loop, L1,
+      // if it is then we are forced to move it after L2
+      for (Value *Op : I->operands()) {
+        if (isDefinedInLoop(Op, L1))
+          neededAfterL2 = true;
+        else if (auto *OpInst = dyn_cast<Instruction>(Op)) {
+          if (toMoveAfterL2.count(OpInst))
+            neededAfterL2 = true;
+        }
+      }
+
+      // if it turns out that we need to move the instruction both after L2 and before L1
+      // because of it's dependencies, then we can't move it at all, if we find even just
+      // one instruction that can't be moved then we can stop altogether as the loop fusion
+      // won't be feasible unless every instruction is moved.
+      // it was decided to start up the bools as true and make them false in the previous code
+      // to avoid an if check, by starting them as true and making them false under those conditions
+      // we can just check for when there are dependencies from both loops and then just from one,
+      // instead starting from false -> true we would have had this check with both as true, 
+      // the checks for both by themselves as the single true bool, and if there are no dependencies
+      // from either side then both would be false requiring a fourth check,/
+      // this way we use boolean logic to save a needless check
+      if (neededBeforeL1 && neededAfterL2)
+        return false;
+
+      
+      if (neededBeforeL1)
+        toMoveBeforeL1.insert(I);
+      else if (neededAfterL2)
+        toMoveAfterL2.insert(I);
+      else toMoveBeforeL1.insert(I);
+    }
+
+    BasicBlock *EntryL1 = getLoopEntry(L1);
+    if (EntryL1) {
+      Instruction *whereToMoveTo = EntryL1->getTerminator();
+      for (Instruction *I : toMoveBeforeL1)
+        I->moveBefore(whereToMoveTo);
+    }
+
+    BasicBlock *ExitL2 = getLoopExit(L2);
+    if (ExitL2) {
+      Instruction *whereToMoveTo = ExitL2->getFirstNonPHI();
+      for (Instruction *I : toMoveAfterL2)
+        I->moveBefore(whereToMoveTo);
+    }
+
+    return true;
   }
 
   /**
@@ -529,6 +659,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    //TODO: vhat is ts commend bradar delet ts
     // TODO: do checks for each pair of loops in each group (groups of only one
     // loop are excluded) and fuse if possible
 
@@ -567,8 +698,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     // getTopLevelLoops() iterates from the last loop to the first
-    bool changed =
-        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+    bool changed = processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
 
     return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }
