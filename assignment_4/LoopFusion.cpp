@@ -159,11 +159,12 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     if (!BI1 || !BI2) return false;
 
-    /* do we need to check for this anymore?
+    // do we need to check for this anymore?
+    // if there are ifs in between two loops it fails;
     if (!BI1->isUnconditional() || !BI2->isUnconditional()) {
       outs() << "test\n";
       return false;
-    }*/
+    }
 
     BasicBlock *NextBB = BI1->getSuccessor(0);
     if (NextBB != EntryL2) {
