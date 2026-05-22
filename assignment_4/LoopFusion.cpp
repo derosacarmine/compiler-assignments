@@ -619,13 +619,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       while (group.size() >= 2 && baseIndex < group.size() - 1) {
         auto nextLoop = group[baseIndex + 1];
 
-        if (!areAdjacent(baseLoop, nextLoop)) {
-          outs() << " -> FALLITO: Non sono adiacenti\n";
-          baseIndex++;
-          baseLoop = group[baseIndex];
-          continue;
-        }
-
         if (!hasSameTripCount(baseLoop, nextLoop)) {
           outs() << " -> FALLITO: Trip count diverso o SCEVCouldNotCompute\n";
           baseIndex++;
@@ -642,6 +635,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
         if (hasScalarDependencies(baseLoop, nextLoop)) {
           outs() << " -> FALLITO: Dipendenze scalari trovate\n";
+          baseIndex++;
+          baseLoop = group[baseIndex];
+          continue;
+        }
+
+        if (!areAdjacent(baseLoop, nextLoop)) {
+          outs() << " -> FALLITO: Non sono adiacenti\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
