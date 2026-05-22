@@ -144,8 +144,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
       if (ExitL1->getFirstNonPHIOrDbg() != BI) {
         if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI)) {
-        outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
-        return false;
+          outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
+          return false;
         }
       }
 
@@ -159,16 +159,20 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     if (!BI1 || !BI2) return false;
 
-    // ts /* */ makes the test fail
-    /*BasicBlock *NextBB = BI1->getSuccessor(0);
+    /* do we need to check for this anymore?
+    if (!BI1->isUnconditional() || !BI2->isUnconditional()) {
+      outs() << "test\n";
+      return false;
+    }*/
+
+    BasicBlock *NextBB = BI1->getSuccessor(0);
     if (NextBB != EntryL2) {
       BranchInst *NextBI = dyn_cast<BranchInst>(NextBB->getTerminator());
-      if (!NextBI || !NextBI->isUnconditional() || NextBI->getSuccessor(0) != EntryL2)
+      if (!NextBI || !NextBI->isUnconditional() || NextBI->getSuccessor(0) != EntryL2) {
+        outs() << "test2\n";
         return false;
+      }
     }
-
-    if (!BI1->isUnconditional())
-        return false;*/
 
     if (ExitL1->getFirstNonPHIOrDbg() != BI1 || EntryL2->getFirstNonPHIOrDbg() != BI2) {
       if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1, EntryL2, BI2)) {
@@ -248,8 +252,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         toMoveBeforeL1.insert(I);
       else if (neededAfterL2)
         toMoveAfterL2.insert(I);
-      else toMoveBeforeL1.insert(I);
+      else 
+        toMoveBeforeL1.insert(I); // by default if there are no dependencies we move the instructions before L1
     }
+
+    // change name of Instruction *whereToMoveTo to something decent
 
     BasicBlock *EntryL1 = getLoopEntry(L1);
     if (EntryL1) {
@@ -264,6 +271,9 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       for (Instruction *I : toMoveAfterL2)
         I->moveBefore(whereToMoveTo);
     }
+
+    if (EntryL2 != nullptr)
+      BI1->setSuccessor(0, EntryL2);
 
     return true;
   }
