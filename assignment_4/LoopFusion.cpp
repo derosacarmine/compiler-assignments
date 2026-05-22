@@ -185,6 +185,26 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return true;
   }
 
+  /**
+   * @brief saves every instruction between two loops L1 and L2 in a vector
+   * it then checks for each instruction, based on it's dependencies with L1 and L2,
+   * if it can be moved before L1, after L2, or can't.
+   * if even just one instruction can't be moved then we stop as we can't fuse two loops
+   * if even just one instruction is in between, this is because the only way an instruction
+   * can't be moved is if it's using something from L1 and if L2 is using the result/variable
+   * of that instruction so fusing two loops with instructions in between requires to move them out 
+   * of the way first, in a case like this unmovable instruction that can't happen and the fusion
+   * is unfeasible
+   * 
+   * @param L1 
+   * @param L2 
+   * @param ExitL1 
+   * @param BI1 
+   * @param EntryL2 
+   * @param BI2 
+   * @return true 
+   * @return false 
+   */
   bool moveInstructionsInBetweenLoops(Loop *L1, Loop *L2, BasicBlock *ExitL1, BranchInst *BI1, BasicBlock *EntryL2 = nullptr, BranchInst *BI2 = nullptr) {
     SetVector<Instruction*> toMoveBeforeL1;
     SetVector<Instruction*> toMoveAfterL2;
@@ -207,12 +227,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         }
       }
     }
-
-    // no instructions between loops
-    // truth be told this condition should never be true as we don't even call this function
-    // unless we find an instruction between L1 and L2, so it's more of a precaution in case
-    // that doesn't work for whatever reason, could most likely be safely removed without repercussions
-    //if (toCheckForCodeMotion.empty()) return true;
 
     for (Instruction *I : toCheckForCodeMotion) {
       bool neededBeforeL1 = false;
@@ -365,22 +379,41 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     for (Instruction *I1 : opsL1) {
       for (Instruction *I2 : opsL2) {
+
+        if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
+          continue;
+
         // checks if there's a negative distance dependency between the first
         // and second loops
         auto dep = DI.depends(I1, I2, true);
-        if (!dep)
+
+        if (!dep){
           continue;
+        }
+
+        // put an outs() here if you want
+        if (dep->isConfused())
+          return true;
+        
+        // ts function checks for dependencies by itself
+        // if there is one then it doesn't continue and return true like before
+        // at the end of this for
+        if (dep->isLoopIndependent())
+          continue;
+
 
         // if there's a conflict and the use of the instruction in L2
         // preceeds the use in L1 (checked with getDirection and GT (greater
         // than)) then we return true (as in it's true that there's a negative
         // distance dependency and the loops can't be fused)
-        // if (dep->isConflicting()) { isConflicting doesn't exist ??
-        if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+        /*if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+          outs() << "test 4\n";
           return true;
         }
-        //}
+        outs() << "test 5\n";*/
       }
+
+      return true;
     }
 
     return false;
@@ -409,6 +442,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
     return false;
   }
+  
   /**
    * @brief updates the phi nodes modifying the label of OldPred with the
    * NewPred label
