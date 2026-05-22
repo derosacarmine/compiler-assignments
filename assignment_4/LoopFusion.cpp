@@ -8,9 +8,7 @@
 #include <llvm-19/llvm/Analysis/LoopAnalysisManager.h>
 #include <llvm-19/llvm/IR/Analysis.h>
 
-#include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
-#include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -28,8 +26,6 @@
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <map>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 using namespace llvm;
