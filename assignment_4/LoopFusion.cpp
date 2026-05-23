@@ -24,6 +24,7 @@
 #include <llvm-19/llvm/Support/Casting.h>
 
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/ADT/SetVector.h"
 
 #include <map>
 #include <vector>
@@ -36,11 +37,23 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
   std::map<Loop *, const SCEV *> loopsTripCountMap;
 
+  /**
+   * @brief returns the correct entry Basic Block based on whether the loop is guarded or not
+   * 
+   * @param L 
+   * @return BasicBlock* 
+   */
   BasicBlock *getLoopEntry(Loop *L) {
     return L->isGuarded() ? L->getLoopGuardBranch()->getParent()
                           : L->getLoopPreheader();
   }
 
+  /**
+   * @brief return the correct exit basic block based on whether the loop is guarded or not
+   * 
+   * @param L 
+   * @return BasicBlock* 
+   */
   BasicBlock *getLoopExit(Loop *L) {
     if (L->isGuarded()) {
       BranchInst *GuardBr = L->getLoopGuardBranch();
@@ -95,7 +108,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return true
    * @return false
    */
-  bool isBlockEmpty(BasicBlock *BB, BranchInst *BI, bool isGuard) {
+  bool isBlockEmpty(BasicBlock *BB, BranchInst *BI, bool isGuarded) {
     Instruction *FirstInst = BB->getFirstNonPHIOrDbg();
 
     // the block is empty
@@ -104,7 +117,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     // for guarded blocks, an additional comparison instruction might be present
-    if (isGuard && BI->isConditional()) {
+    if (isGuarded && BI->isConditional()) {
       if (FirstInst == dyn_cast<Instruction>(BI->getCondition())) {
         if (FirstInst->getNextNonDebugInstruction() == BI) {
           return true;
@@ -112,6 +125,43 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    return false;
+  }
+
+/**
+   * @brief helper function to get if an instruction is defined in the given loop
+   * 
+   * @param V 
+   * @param L 
+   * @return true 
+   * @return false 
+   */
+  bool isDefinedInLoop(Value *V, Loop *L) {
+    if (auto *I = dyn_cast<Instruction>(V))
+      return L->contains(I->getParent());
+    return false;
+  }
+
+  /**
+   * @brief helper function to get if an instruction is used in the given loop
+   * 
+   * @param I 
+   * @param L 
+   * @return true 
+   * @return false 
+   */
+  bool isUsedInLoop(Instruction *I, Loop *L, bool checkForMemoryWrite) {
+    for (User *U : I->users()) {
+      if (auto *UserInst = dyn_cast<Instruction>(U)) {
+        if (L->contains(UserInst->getParent())) {
+          if (checkForMemoryWrite) {
+            if (UserInst->mayWriteToMemory())
+              return true;
+          } else
+              return true;
+        }
+      }
+    }
     return false;
   }
 
@@ -127,7 +177,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return false
    */
   bool areAdjacent(Loop *L1, Loop *L2) {
-
     BasicBlock *ExitL1 = getLoopExit(L1);
     BasicBlock *EntryL2 = getLoopEntry(L2);
     bool isGuarded = L1->isGuarded();
@@ -139,38 +188,160 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (isGuarded != L2->isGuarded())
       return false;
 
+    // if guarded, both must be equivalent
     if (isGuarded && !areConditionsEquivalent(L1->getLoopGuardBranch(),
                                               L2->getLoopGuardBranch())) {
       return false;
     }
 
     BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
-    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
-
-    if (!BI1 || !BI2)
+    if (!BI1 || (!isGuarded && !BI1->isUnconditional()))
       return false;
 
     // first case, exit and entry correspond
     if (ExitL1 == EntryL2) {
 
+      // if there's an instruction or more between the loops, try to move it/them
       if (!isBlockEmpty(ExitL1, BI1, isGuarded)) {
-        outs() << " -> ERROR: there are instructions between the loops.\n";
-        return false;
+        if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1)) {
+          outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
+          return false;
+        }
       }
 
       return true;
     }
 
+    // only create BI2 if exitL1 and entryL2 aren't the same
+    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
+    if (!BI2 || (!isGuarded && !BI2->isUnconditional()))
+      return false;
+
     // make sure that two loops are considered adjacent even with a
     // "trampoline" block in the middle
-    if (!BI1->isUnconditional() || BI1->getSuccessor(0) != EntryL2)
-      return false;
+     BasicBlock *NextBB = BI1->getSuccessor(0);
+    if (NextBB != EntryL2) {
+      BranchInst *NextBI = dyn_cast<BranchInst>(NextBB->getTerminator());
+      if (!NextBI || !NextBI->isUnconditional() || NextBI->getSuccessor(0) != EntryL2) {
+        return false;
+      }
+    }
 
     if (!isBlockEmpty(ExitL1, BI1, false) ||
         !isBlockEmpty(EntryL2, BI2, isGuarded)) {
-      outs() << " -> ERROR: there are instructions between the loops.\n";
-      return false;
+      if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1, EntryL2, BI2)) {
+        outs() << " -> ERROR: there are unmovable instructions between the loops.\n";
+        return false;
+      }
     }
+
+    return true;
+  }
+
+  /**
+   * @brief saves every instruction between two loops L1 and L2 in a vector
+   * it then checks for each instruction, based on it's dependencies with L1 and L2,
+   * if it can be moved before L1, after L2, or can't.
+   * if even just one instruction can't be moved then we stop as we can't fuse two loops
+   * if even just one instruction is in between, this is because the only way an instruction
+   * can't be moved is if it's using something from L1 and if L2 is using the result/variable
+   * of that instruction so fusing two loops with instructions in between requires to move them out 
+   * of the way first, in a case like this unmovable instruction that can't happen and the fusion
+   * is unfeasible
+   * 
+   * @param L1 
+   * @param L2 
+   * @param ExitL1 
+   * @param BI1 
+   * @param EntryL2 
+   * @param BI2 
+   * @return true 
+   * @return false 
+   */
+  bool moveInstructionsInBetweenLoops(Loop *L1, Loop *L2, BasicBlock *ExitL1, BranchInst *BI1, BasicBlock *EntryL2 = nullptr, BranchInst *BI2 = nullptr) {
+    SetVector<Instruction*> toMoveBeforeL1;
+    SetVector<Instruction*> toMoveAfterL2;
+
+    std::vector<Instruction*> toCheckForCodeMotion;
+
+    for (Instruction &I : *ExitL1) {
+      if (!isa<PHINode>(&I) && &I != BI1 && !isa<DbgInfoIntrinsic>(&I)) {
+        toCheckForCodeMotion.push_back(&I);
+      }
+    }
+
+    // I don't need to check for EntryL2 != ExitL1 as I do that in areAdjacent before calling
+    // this function, if they're equal then I don't give EntryL2 as a parameter and it will
+    // be nullptr meaning I just need to check that instead (should be equivalent either way)
+    if (EntryL2 != nullptr && EntryL2 != L2->getHeader()) {
+      for (Instruction &I : *EntryL2) {
+        if (!isa<PHINode>(&I) && &I != BI2 && !isa<DbgInfoIntrinsic>(&I)) {
+          toCheckForCodeMotion.push_back(&I);
+        }
+      }
+    }
+
+    for (Instruction *I : toCheckForCodeMotion) {
+      bool neededBeforeL1 = false;
+      bool neededAfterL2 = false;
+
+      // checks if the instruction is needed after L2
+      // if it is then we are forced to move it before L1
+      if (isUsedInLoop(I, L2, false))
+        neededBeforeL1 = true;
+
+      // checks that the instruction is using something from the previous loop, L1,
+      // if it is then we are forced to move it after L2
+      for (Value *Op : I->operands()) {
+        if (isDefinedInLoop(Op, L1))
+          neededAfterL2 = true;
+        else if (auto *OpInst = dyn_cast<Instruction>(Op)) {
+          if (toMoveAfterL2.count(OpInst))
+            neededAfterL2 = true;
+        }
+      }
+
+      // if it turns out that we need to move the instruction both after L2 and before L1
+      // because of it's dependencies, then we can't move it at all, if we find even just
+      // one instruction that can't be moved then we can stop altogether as the loop fusion
+      // won't be feasible unless every instruction is moved.
+      // it was decided to start up the bools as true and make them false in the previous code
+      // to avoid an if check, by starting them as true and making them false under those conditions
+      // we can just check for when there are dependencies from both loops and then just from one,
+      // instead starting from false -> true we would have had this check with both as true, 
+      // the checks for both by themselves as the single true bool, and if there are no dependencies
+      // from either side then both would be false requiring a fourth check,/
+      // this way we use boolean logic to save a needless check
+      if (neededBeforeL1 && neededAfterL2)
+        return false;
+
+      
+      if (neededBeforeL1)
+        toMoveBeforeL1.insert(I);
+      else if (neededAfterL2)
+        toMoveAfterL2.insert(I);
+      else 
+        toMoveBeforeL1.insert(I); // by default if there are no dependencies we move the instructions before L1
+    }
+
+    // change name of Instruction *whereToMoveTo to something decent
+
+    BasicBlock *EntryL1 = getLoopEntry(L1);
+    if (EntryL1) {
+      Instruction *whereToMoveTo = EntryL1->getTerminator();
+      for (Instruction *I : toMoveBeforeL1)
+        I->moveBefore(whereToMoveTo);
+    }
+
+    BasicBlock *ExitL2 = getLoopExit(L2);
+    if (ExitL2) {
+      Instruction *whereToMoveTo = ExitL2->getFirstNonPHI();
+      for (Instruction *I : toMoveAfterL2)
+        I->moveBefore(whereToMoveTo);
+    }
+
+    if (EntryL2 != nullptr)
+      BI1->setSuccessor(0, EntryL2);
 
     return true;
   }
@@ -266,22 +437,42 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     for (Instruction *I1 : opsL1) {
       for (Instruction *I2 : opsL2) {
+
+        if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
+          continue;
+
         // checks if there's a negative distance dependency between the first
         // and second loops
         auto dep = DI.depends(I1, I2, true);
-        if (!dep)
+
+        if (!dep){
           continue;
+        }
+
+        // put an outs() here if you want
+        if (dep->isConfused())
+          return true;
+        
+        // ts function checks for dependencies by itself
+        // if there is one then it doesn't continue and return true like before
+        // at the end of this for
+        if (dep->isLoopIndependent())
+          continue;
+
 
         // if there's a conflict and the use of the instruction in L2
         // preceeds the use in L1 (checked with getDirection and GT (greater
         // than)) then we return true (as in it's true that there's a negative
         // distance dependency and the loops can't be fused)
-        // if (dep->isConflicting()) { isConflicting doesn't exist ??
-        if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+        /*if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+          outs() << "test 4\n";
           return true;
         }
-        //}
+        outs() << "test 5\n";*/
+        return true;
       }
+
+      
     }
 
     return false;
@@ -298,18 +489,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
   bool hasScalarDependencies(Loop *L1, Loop *L2) {
     for (BasicBlock *BB : L1->getBlocks()) {
       for (Instruction &I : *BB) {
-        for (User *U : I.users()) {
-          if (Instruction *UserInst = dyn_cast<Instruction>(U)) {
-
-            if (L2->contains(UserInst->getParent())) {
-              return true;
-            }
-          }
-        }
+        if (isUsedInLoop(&I, L2, true))
+          return true;
       }
     }
     return false;
   }
+  
   /**
    * @brief updates the phi nodes modifying the label of OldPred with the
    * NewPred label
@@ -619,13 +805,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       while (group.size() >= 2 && baseIndex < group.size() - 1) {
         auto nextLoop = group[baseIndex + 1];
 
-        if (!areAdjacent(baseLoop, nextLoop)) {
-          outs() << " -> FALLITO: Non sono adiacenti\n";
-          baseIndex++;
-          baseLoop = group[baseIndex];
-          continue;
-        }
-
         if (!hasSameTripCount(baseLoop, nextLoop)) {
           outs() << " -> FALLITO: Trip count diverso o SCEVCouldNotCompute\n";
           baseIndex++;
@@ -642,6 +821,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
         if (hasScalarDependencies(baseLoop, nextLoop)) {
           outs() << " -> FALLITO: Dipendenze scalari trovate\n";
+          baseIndex++;
+          baseLoop = group[baseIndex];
+          continue;
+        }
+
+        if (!areAdjacent(baseLoop, nextLoop)) {
+          outs() << " -> FALLITO: Non sono adiacenti\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
@@ -676,6 +862,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    //TODO: vhat is ts commend bradar delet ts
     // TODO: vhat is ts commend bradar delet ts
     //  TODO: do checks for each pair of loops in each group (groups of only one
     //  loop are excluded) and fuse if possible
@@ -717,8 +904,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     // getTopLevelLoops() iterates from the last loop to the first
-    bool changed =
-        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+    bool changed = processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
 
     return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }

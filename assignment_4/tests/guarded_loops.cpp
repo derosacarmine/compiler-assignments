@@ -9,6 +9,8 @@ int fun(int n) {
     } while (i < n);
   }
 
+  //int a = i+1;
+
   if (j == 0) {
     do {
       int c = j * 2;
