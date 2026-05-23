@@ -144,9 +144,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
   /**
    * @brief helper function to get if an instruction is used in the given loop
+   * can also check if the instruction writes to memory instead of just reading it based on the given boolean
    * 
    * @param I 
    * @param L 
+   * @param checkForMemoryWrite 
    * @return true 
    * @return false 
    */
@@ -465,10 +467,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         // than)) then we return true (as in it's true that there's a negative
         // distance dependency and the loops can't be fused)
         /*if (dep->getDirection(1) == Dependence::DVEntry::GT) {
-          outs() << "test 4\n";
           return true;
-        }
-        outs() << "test 5\n";*/
+        }*/
         return true;
       }
 
@@ -489,7 +489,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
   bool hasScalarDependencies(Loop *L1, Loop *L2) {
     for (BasicBlock *BB : L1->getBlocks()) {
       for (Instruction &I : *BB) {
-        if (isUsedInLoop(&I, L2, true))
+        if (isUsedInLoop(&I, L2, false))
           return true;
       }
     }
