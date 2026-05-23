@@ -4,11 +4,11 @@ int fun(int n, int arr[]) {
     c = i;
   }
   for (int i = 0; i < n; i++) {
-    int d = i + c;
-    arr[i] = d * 2;
+    // int d = i + c;
+    arr[i] = c * 2;
   }
   for (int i = 0; i < n; i++) {
-    int d = arr[i + 1] + c;
+    int d = arr[i + 2] + 3;
   }
   return 0;
 }

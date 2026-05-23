@@ -8,7 +8,7 @@ int fun(int n, int arr[]) {
     arr[i] = d * 2;
   }
   for (int i = 0; i < n; i++) {
-    int d = arr[i];
+    int e = arr[i];
   }
   return 0;
 }

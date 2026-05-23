@@ -9,7 +9,7 @@ int fun(int n) {
     } while (i < n);
   }
 
-  //int a = i+1;
+  int a = j + 20;
 
   if (j == 0) {
     do {
