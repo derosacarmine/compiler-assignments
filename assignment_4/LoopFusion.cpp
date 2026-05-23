@@ -36,26 +36,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
   std::map<Loop *, const SCEV *> loopsTripCountMap;
 
-  /**
-   * @brief collects the loops present at each nest level that are candidates
-   * for loop fusion
-   *
-   * @param LL current loop
-   * @param loopsMap global map that tracks the candidates loop for each nest
-   * level
-   * @param n current nest level
-   */
-  // void collectLoopsAtN(Loop* LL,  std::map<unsigned, std::vector<Loop*>>&
-  // loopsMap, int n){
-  //     if(!LL->isLoopSimplifyForm())
-  //             return;
-  //     loopsMap[n].push_back(LL);
-
-  //     for(auto& subLL : LL->getSubLoops()){
-  //         collectLoopsAtN(subLL, loopsMap, n+1);
-  //     }
-  // }
-
   BasicBlock *getLoopEntry(Loop *L) {
     return L->isGuarded() ? L->getLoopGuardBranch()->getParent()
                           : L->getLoopPreheader();
@@ -78,12 +58,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return L->getExitBlock();
   }
 
+  /**
+   * @brief checks if the guard blocks of the two loops are equivalent
+   *
+   * @param l1GuardCond
+   * @param l2GuardCond
+   * @return true
+   * @return false
+   */
   bool areConditionsEquivalent(BranchInst *l1GuardCond,
                                BranchInst *l2GuardCond) {
-    // CmpInst *l1CmpInst = dyn_cast<CmpInst>(l1GuardCond->getCondition());
-    // CmpInst *l2CmpInst = dyn_cast<CmpInst>(l2GuardCond->getCondition());
 
-    // more memory safe
     Value *Cond1 = l1GuardCond->getCondition();
     Value *Cond2 = l2GuardCond->getCondition();
 
@@ -94,6 +79,36 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (auto *Inst1 = dyn_cast<Instruction>(Cond1)) {
       if (auto *Inst2 = dyn_cast<Instruction>(Cond2)) {
         return Inst1->isIdenticalTo(Inst2);
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * @brief checks if the block is empty (it contains only a branch or
+   * if it has a comparison instruction for guarded loops
+   *
+   * @param BB
+   * @param BI
+   * @param isGuard
+   * @return true
+   * @return false
+   */
+  bool isBlockEmpty(BasicBlock *BB, BranchInst *BI, bool isGuard) {
+    Instruction *FirstInst = BB->getFirstNonPHIOrDbg();
+
+    // the block is empty
+    if (FirstInst == BI) {
+      return true;
+    }
+
+    // for guarded blocks, an additional comparison instruction might be present
+    if (isGuard && BI->isConditional()) {
+      if (FirstInst == dyn_cast<Instruction>(BI->getCondition())) {
+        if (FirstInst->getNextNonDebugInstruction() == BI) {
+          return true;
+        }
       }
     }
 
@@ -112,18 +127,33 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return false
    */
   bool areAdjacent(Loop *L1, Loop *L2) {
+
     BasicBlock *ExitL1 = getLoopExit(L1);
     BasicBlock *EntryL2 = getLoopEntry(L2);
+    bool isGuarded = L1->isGuarded();
 
     if (!ExitL1 || !EntryL2)
       return false;
 
+    // both must be guarded or unguarded
+    if (isGuarded != L2->isGuarded())
+      return false;
+
+    if (isGuarded && !areConditionsEquivalent(L1->getLoopGuardBranch(),
+                                              L2->getLoopGuardBranch())) {
+      return false;
+    }
+
+    BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
+    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
+
+    if (!BI1 || !BI2)
+      return false;
+
+    // first case, exit and entry correspond
     if (ExitL1 == EntryL2) {
-      BranchInst *BI = dyn_cast<BranchInst>(ExitL1->getTerminator());
 
-      if (!BI || !BI->isUnconditional()) return false;
-
-      if (ExitL1->getFirstNonPHIOrDbg() != BI) {
+      if (!isBlockEmpty(ExitL1, BI1, isGuarded)) {
         outs() << " -> ERROR: there are instructions between the loops.\n";
         return false;
       }
@@ -131,17 +161,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       return true;
     }
 
-    // should make sure that two loops are considered adjacent even with a
+    // make sure that two loops are considered adjacent even with a
     // "trampoline" block in the middle
-    BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
-    BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
-
-    if (!BI1 || !BI2) return false;
-
-    if (!BI1->isUnconditional() || BI1->getSuccessor(0) != EntryL2 || !BI2->isUnconditional())
+    if (!BI1->isUnconditional() || BI1->getSuccessor(0) != EntryL2)
       return false;
 
-    if (ExitL1->getFirstNonPHIOrDbg() != BI1 || EntryL2->getFirstNonPHIOrDbg() != BI2) {
+    if (!isBlockEmpty(ExitL1, BI1, false) ||
+        !isBlockEmpty(EntryL2, BI2, isGuarded)) {
       outs() << " -> ERROR: there are instructions between the loops.\n";
       return false;
     }
@@ -191,6 +217,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto Pre1 = getLoopEntry(L1);
     auto Pre2 = getLoopEntry(L2);
 
+    // outs() << "Pre1: ";
+    // Pre1->printAsOperand(outs());
+    // outs() << "\nPre2: ";
+    // Pre2->printAsOperand(outs());
+    // outs() << "\n";
     if (!Pre1 || !Pre2) {
       return false;
     }
@@ -297,39 +328,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
   }
 
-  // Gemini made this, I don't know why the builtin doesn't work
-  PHINode *findInductionVariable(Loop *L) {
-    BasicBlock *Header = L->getHeader();
-    BranchInst *Term = dyn_cast<BranchInst>(Header->getTerminator());
-
-    // Assicuriamoci che l'header abbia un branch condizionale
-    if (!Term || !Term->isConditional())
-      return nullptr;
-
-    // Prendiamo l'istruzione di comparazione (es. %3 = icmp slt i32 %.01, %0)
-    CmpInst *Cmp = dyn_cast<CmpInst>(Term->getCondition());
-    if (!Cmp)
-      return nullptr;
-
-    // Controlliamo gli operandi della comparazione.
-    // Uno dei due deve essere il nostro nodo PHI dell'header!
-    for (Value *Op : Cmp->operands()) {
-      if (PHINode *PHI = dyn_cast<PHINode>(Op)) {
-        if (PHI->getParent() == Header) {
-          return PHI; // Trovata!
-        }
-      }
-    }
-
-    return nullptr;
-  }
-
   bool fuseLoops(Loop *L1, Loop *L2, LoopInfo &LI) {
     auto L1Header = L1->getHeader();
     auto L1HeaderTerminator = L1Header->getTerminator();
     // auto L1InductionVar = L1->getInductionVariable(SE); for some reason it
     // doesn't work
-    auto L1InductionVar = findInductionVariable(L1);
+    // auto L1InductionVar = findInductionVariable(L1);
+    auto L1InductionVar = L1->getCanonicalInductionVariable();
     auto L1Latch = L1->getLoopLatch();
 
     auto L2Header = L2->getHeader();
@@ -337,7 +342,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto L2ExitBlock = getLoopExit(L2);
     auto L2EntryBlock = getLoopEntry(L2);
     // auto L2InductionVar = L2->getInductionVariable(SE);
-    auto L2InductionVar = findInductionVariable(L2);
+    // auto L2InductionVar = findInductionVariable(L2);
+    auto L2InductionVar = L2->getCanonicalInductionVariable();
     auto L2Latch = L2->getLoopLatch();
 
     if (!L1InductionVar || !L2InductionVar) {
@@ -436,6 +442,130 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     LI.erase(L2);
     return true;
   }
+
+  bool fuseGuardedLoops(Loop *L1, Loop *L2, LoopInfo &LI) {
+    auto L1Header = L1->getHeader();
+    auto L1Latch = L1->getLoopLatch();
+    auto L1Preheader = L1->getLoopPreheader();
+    auto L1InductionVar = L1->getCanonicalInductionVariable();
+    auto L1GuardBr = L1->getLoopGuardBranch();
+    auto L1GuardBB = L1GuardBr->getParent();
+
+    auto L2Header = L2->getHeader();
+    auto L2Latch = L2->getLoopLatch();
+    auto L2Preheader = L2->getLoopPreheader();
+    auto L2InductionVar = L2->getCanonicalInductionVariable();
+    auto L2GuardBr = L2->getLoopGuardBranch();
+    auto L2GuardBB = L2GuardBr->getParent();
+
+    if (!L1InductionVar || !L2InductionVar) {
+      outs() << "Induction not found\n";
+      return false;
+    }
+
+    // L'uscita globale di L2 (il blocco bypass)
+    BasicBlock *L2Bypass = (L2GuardBr->getSuccessor(0) == L2Preheader)
+                               ? L2GuardBr->getSuccessor(1)
+                               : L2GuardBr->getSuccessor(0);
+
+    BasicBlock *L2BodyEntry = L2Header;
+
+    if (!L2BodyEntry) {
+      outs() << "l2 body entry not found\n";
+      return false;
+    }
+    // -----------------------------------------------
+
+    std::vector<BasicBlock *> L1LatchPreds(predecessors(L1Latch).begin(),
+                                           predecessors(L1Latch).end());
+    std::vector<BasicBlock *> L2LatchPreds(predecessors(L2Latch).begin(),
+                                           predecessors(L2Latch).end());
+
+    // 1. Spostamento Nodi PHI
+    for (PHINode &PN : llvm::make_early_inc_range(L2Header->phis())) {
+      if (&PN == L2InductionVar) {
+        PN.replaceAllUsesWith(L1InductionVar);
+        PN.eraseFromParent();
+      } else {
+        Instruction *InsertPt = L1Header->getFirstNonPHI();
+        PN.moveBefore(InsertPt);
+
+        int entryIdx = PN.getBasicBlockIndex(L2Preheader);
+        if (entryIdx >= 0) {
+          PN.setIncomingBlock(entryIdx, L1Preheader);
+        }
+
+        int latchIdx = PN.getBasicBlockIndex(L2Latch);
+        if (latchIdx >= 0) {
+          PN.setIncomingBlock(latchIdx, L1Latch);
+        }
+      }
+    }
+
+    // Qualsiasi blocco che prima puntava alla guardia di L2 (sia che si tratti
+    // del fallimento della guardia di L1, sia l'uscita normale di L1), ora
+    // scavalca L2 e va dritto al bypass globale.
+    std::vector<BasicBlock *> L2GuardPreds(predecessors(L2GuardBB).begin(),
+                                           predecessors(L2GuardBB).end());
+    for (BasicBlock *Pred : L2GuardPreds) {
+      auto *Term = Pred->getTerminator();
+      for (unsigned i = 0; i < Term->getNumSuccessors(); i++) {
+        if (Term->getSuccessor(i) == L2GuardBB) {
+          Term->setSuccessor(i, L2Bypass);
+          updatePhiNodes(L2Bypass, L2GuardBB, Pred);
+        }
+      }
+    }
+
+    for (BasicBlock *PredL1 : L1LatchPreds) {
+      auto predTerminator = PredL1->getTerminator();
+      for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
+        if (predTerminator->getSuccessor(i) == L1Latch) {
+          predTerminator->setSuccessor(i, L2BodyEntry);
+          updatePhiNodes(L2BodyEntry, L2Header, PredL1);
+        }
+      }
+    }
+
+    for (BasicBlock *PredL2 : L2LatchPreds) {
+      auto predTerminator = PredL2->getTerminator();
+      for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
+        if (predTerminator->getSuccessor(i) == L2Latch) {
+          predTerminator->setSuccessor(i, L1Latch);
+          for (BasicBlock *OldPredL1 : L1LatchPreds) {
+            updatePhiNodes(L1Latch, OldPredL1, PredL2);
+          }
+        }
+      }
+    }
+
+    // 4. Aggiornamento LoopInfo e SubLoops
+    std::vector<Loop *> SubLoops = L2->getSubLoopsVector();
+    for (Loop *SubLoop : SubLoops) {
+      L2->removeChildLoop(SubLoop);
+      L1->addChildLoop(SubLoop);
+    }
+
+    std::vector<BasicBlock *> blocksToMove;
+    for (BasicBlock *BB : L2->getBlocks()) {
+      if (LI.getLoopFor(BB) == L2) {
+        blocksToMove.push_back(BB);
+      }
+    }
+
+    for (BasicBlock *BB : blocksToMove) {
+      if (BB != L2Latch && BB != L2Preheader && BB != L2GuardBB) {
+        L2->removeBlockFromLoop(BB);
+        L1->addBasicBlockToLoop(BB, LI);
+      }
+    }
+
+    if (Loop *ParentLoop = L2->getParentLoop())
+      ParentLoop->removeChildLoop(L2);
+
+    LI.erase(L2);
+    return true;
+  }
   bool processNestLevelLoops(std::vector<Loop *> &siblings, DominatorTree &DT,
                              PostDominatorTree &PDT, DependenceInfo &DI,
                              LoopInfo &LI, Function &F) {
@@ -453,8 +583,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     std::vector<std::vector<Loop *>> cfeGroups;
     if (candidateLoops.size() >= 2) {
       std::sort(candidateLoops.begin(), candidateLoops.end(),
-                [&DT](Loop *L1, Loop *L2) {
-                  return DT.dominates(L1->getHeader(), L2->getHeader());
+                [&](Loop *L1, Loop *L2) { // cattura 'this' per getLoopEntry
+                  return DT.dominates(getLoopEntry(L1), getLoopEntry(L2));
                 });
 
       for (auto &loop : candidateLoops) {
@@ -518,7 +648,15 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         }
 
         outs() << " -> Tutti i check passati! Tento la fusione...\n";
-        if (fuseLoops(baseLoop, nextLoop, LI)) {
+        bool fusionSuccess = false;
+        if (baseLoop->isGuarded()) {
+          outs() << "Guarded Fusion\n";
+          fusionSuccess = fuseGuardedLoops(baseLoop, nextLoop, LI);
+        } else {
+          outs() << "Normal Fusion\n";
+          fusionSuccess = fuseLoops(baseLoop, nextLoop, LI);
+        }
+        if (fusionSuccess) {
           outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
           group.erase(group.begin() + baseIndex + 1);
           fused = true;
@@ -530,19 +668,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
           DT.recalculate(F);
           PDT.recalculate(F);
-          // SE.forgetAllLoops();
         } else {
-          outs() << " -> FUSIONE ABORTITA: Induction variable non trovata in "
-                    "fase di fusione.\n";
+          outs() << " -> FUSIONE ABORTITA\n";
           baseIndex++;
           baseLoop = group[baseIndex];
         }
       }
     }
 
-    //TODO: vhat is ts commend bradar delet ts
-    // TODO: do checks for each pair of loops in each group (groups of only one
-    // loop are excluded) and fuse if possible
+    // TODO: vhat is ts commend bradar delet ts
+    //  TODO: do checks for each pair of loops in each group (groups of only one
+    //  loop are excluded) and fuse if possible
 
     // we explore the next nest level for each loop (in case of fusion both the
     // domTree and LoopAnalysis must be updated)
@@ -576,10 +712,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     for (auto L : LI.getLoopsInPreorder()) {
       auto backedgeLoop = SE.getBackedgeTakenCount(L);
       loopsTripCountMap[L] = backedgeLoop;
+      // L->getCanonicalInductionVariable()->printAsOperand(outs());
+      // outs() << "\n";
     }
 
     // getTopLevelLoops() iterates from the last loop to the first
-    bool changed = processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+    bool changed =
+        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
 
     return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }
