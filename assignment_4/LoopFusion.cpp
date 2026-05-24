@@ -11,6 +11,7 @@
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
 #include <llvm-19/llvm/IR/BasicBlock.h>
@@ -428,6 +429,22 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
   }
 
   /**
+   * @brief Helper function, it gets the Value operand used as the pointer in
+   * the store/load instruction
+   *
+   *
+   * @param Inst
+   * @return Value*
+   */
+  Value *getPointerOperand(Instruction *Inst) {
+    if (LoadInst *LI = dyn_cast<LoadInst>(Inst))
+      return LI->getPointerOperand();
+    if (StoreInst *SI = dyn_cast<StoreInst>(Inst))
+      return SI->getPointerOperand();
+    return nullptr;
+  }
+
+  /**
    * @brief checks that there are no negative distance dependencies
    * between two loops, or in other words L2 can't have an instruction
    * at iteration m that uses a value computed by L1 at a future
@@ -438,12 +455,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return true
    * @return false
    */
-  bool hasNegativeDependencies(Loop *L1, Loop *L2, DependenceInfo &DI) {
-    // TODO: I'm not even gonna read big dawg's code for ts, I'mma just hope ts
-    // works well enough :pray: I've added a function for scalar dependencies,
-    // but i'm still unsure if it should be used here
+  bool hasNegativeDependencies(Loop *L1, Loop *L2, ScalarEvolution &SE) {
 
-    // save operations that can change memory in some way to vectors
     std::vector<Instruction *> opsL1, opsL2;
 
     for (BasicBlock *BB : L1->getBlocks()) {
@@ -458,42 +471,85 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           opsL2.push_back(&I);
     }
 
-    // if the vectors end up empty we can return without doing any check
     if (opsL1.empty() || opsL2.empty())
       return false;
 
     for (Instruction *I1 : opsL1) {
       for (Instruction *I2 : opsL2) {
 
-        if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
-          continue;
-
-        // checks if there's a negative distance dependency between the first
-        // and second loops
-        auto dep = DI.depends(I1, I2, true);
-
-        if (!dep) {
+        // if both instruction are reading, they don't have a negative
+        // dependency
+        if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory()) {
           continue;
         }
 
-        // put an outs() here if you want
-        if (dep->isConfused())
+        Value *Ptr1 = getPointerOperand(I1);
+        Value *Ptr2 = getPointerOperand(I2);
+
+        if (!Ptr1 || !Ptr2)
           return true;
 
-        // ts function checks for dependencies by itself
-        // if there is one then it doesn't continue and return true like before
-        // at the end of this for
-        if (dep->isLoopIndependent())
+        // if the instructions are operating on different arrays (so different
+        // pointers), there is no dependence
+        if (getUnderlyingObject(Ptr1) != getUnderlyingObject(Ptr2)) {
           continue;
+        }
 
-        // if there's a conflict and the use of the instruction in L2
-        // preceeds the use in L1 (checked with getDirection and GT (greater
-        // than)) then we return true (as in it's true that there's a negative
-        // distance dependency and the loops can't be fused)
-        /*if (dep->getDirection(1) == Dependence::DVEntry::GT) {
+        const SCEV *Scev1 = SE.getSCEV(Ptr1);
+        const SCEV *Scev2 = SE.getSCEV(Ptr2);
+
+        // the access equation must be linear (e.g. Base + i * step)
+        auto *AR1 = dyn_cast<SCEVAddRecExpr>(Scev1);
+        auto *AR2 = dyn_cast<SCEVAddRecExpr>(Scev2);
+
+        if (!AR1 || !AR2 || !AR1->isAffine() || !AR2->isAffine()) {
+          outs() << " -> Memory access is not affine/linear\n";
           return true;
-        }*/
-        return true;
+        }
+
+        const SCEV *Step1 = AR1->getStepRecurrence(SE);
+        const SCEV *Step2 = AR2->getStepRecurrence(SE);
+
+        // if they iterate with different steps (e.g. i++ and i+=2), we do not
+        // manage them
+        if (Step1 != Step2) {
+          return true;
+        }
+
+        const SCEV *Start1 = AR1->getStart();
+        const SCEV *Start2 = AR2->getStart();
+
+        // we get the memory access difference at the beginning of the loop
+        const SCEV *Diff = SE.getMinusSCEV(Start2, Start1);
+
+        // the difference is constant
+        if (auto *C = dyn_cast<SCEVConstant>(Diff)) {
+          int64_t Distance = C->getAPInt().getSExtValue();
+
+          // the step is constant
+          if (auto *StepC = dyn_cast<SCEVConstant>(Step1)) {
+            int64_t StepVal = StepC->getAPInt().getSExtValue();
+
+            // Negative dependence condition:
+            // if the step is positive (e.g. i++) and the distance is positive
+            // (e.g L1 -> A[i], L2 -> A[i+1]) or they are both negative (e.g
+            // i--, L1 -> A[i], L2 -> A[i-1]), then L2 is accessing the data
+            // before L1, so we have a negative dependence
+            if ((Distance > 0 && StepVal > 0) ||
+                (Distance < 0 && StepVal < 0)) {
+              outs() << " -> FOUND NEGATIVE DEPENDENCE\n";
+              return true;
+            }
+          } else {
+            // the step is not costant, if there is a difference we are not sure
+            // if there is a negative dependence
+            if (Distance != 0)
+              return true;
+          }
+        } else {
+          // the difference is not costant, there could be a negative dependence
+          return true;
+        }
       }
     }
 
@@ -775,7 +831,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return true;
   }
   bool processNestLevelLoops(std::vector<Loop *> &siblings, DominatorTree &DT,
-                             PostDominatorTree &PDT, DependenceInfo &DI,
+                             PostDominatorTree &PDT, ScalarEvolution &SE,
                              LoopInfo &LI, Function &F) {
     std::vector<Loop *> candidateLoops;
     bool fused = false;
@@ -790,6 +846,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
     std::vector<std::vector<Loop *>> cfeGroups;
     if (candidateLoops.size() >= 2) {
+      // make sure the loops are ordered from first to last
       std::sort(candidateLoops.begin(), candidateLoops.end(),
                 [&](Loop *L1, Loop *L2) { // cattura 'this' per getLoopEntry
                   return DT.dominates(getLoopEntry(L1), getLoopEntry(L2));
@@ -834,7 +891,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           continue;
         }
 
-        if (hasNegativeDependencies(baseLoop, nextLoop, DI)) {
+        if (hasNegativeDependencies(baseLoop, nextLoop, SE)) {
           outs() << " -> FALLITO: Dipendenze negative trovate\n";
           baseIndex++;
           baseLoop = group[baseIndex];
@@ -884,23 +941,10 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
-    // TODO: vhat is ts commend bradar delet ts
-    //  TODO: vhat is ts commend bradar delet ts
-    //   TODO: do checks for each pair of loops in each group (groups of only
-    //   one loop are excluded) and fuse if possible
-
-    // we explore the next nest level for each loop (in case of fusion both the
-    // domTree and LoopAnalysis must be updated)
-    // if (changed) {
-    //   DT.recalculate(F);
-    //   PDT.recalculate(F);
-    //   SE.forgetAllLoops();
-    // }
-
     bool childrenFused = false;
     for (Loop *L : siblings) {
       std::vector<Loop *> children = L->getSubLoopsVector();
-      if (processNestLevelLoops(children, DT, PDT, DI, LI, F)) {
+      if (processNestLevelLoops(children, DT, PDT, SE, LI, F)) {
         childrenFused = true;
       }
     }
@@ -910,24 +954,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-
     DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
     PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
-
-    DependenceInfo &DI = AM.getResult<DependenceAnalysis>(F);
 
     for (auto L : LI.getLoopsInPreorder()) {
       auto backedgeLoop = SE.getBackedgeTakenCount(L);
       loopsTripCountMap[L] = backedgeLoop;
-      // L->getCanonicalInductionVariable()->printAsOperand(outs());
-      // outs() << "\n";
     }
 
-    // getTopLevelLoops() iterates from the last loop to the first
     bool changed =
-        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, DI, LI, F);
+        processNestLevelLoops(LI.getTopLevelLoopsVector(), DT, PDT, SE, LI, F);
 
     return (changed ? PreservedAnalyses::none() : PreservedAnalyses::all());
   }
