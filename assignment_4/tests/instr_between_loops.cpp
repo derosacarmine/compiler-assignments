@@ -11,8 +11,8 @@ int fun(int n) {
   // int b = d + 2;
   // int z = 5+2;
 
-  if (d == 3)
-    d = 5;
+  // if (d == 3)
+  //   d = 5;
 
   for (int i = 0; i < n; i++) {
     d = i + 2;

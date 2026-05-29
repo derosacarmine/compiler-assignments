@@ -212,8 +212,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       // it/them
       if (!isBlockEmpty(ExitL1, BI1, isGuarded)) {
         if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1)) {
-          outs() << " -> ERROR: there are unmovable instructions between the "
-                    "loops.\n";
+          outs() << "Error: there are unmovable instructions between the "
+                    "loops, so they can't be made adjacent.\n";
           return false;
         }
       }
@@ -240,8 +240,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (!isBlockEmpty(ExitL1, BI1, false) ||
         !isBlockEmpty(EntryL2, BI2, isGuarded)) {
       if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1, EntryL2, BI2)) {
-        outs() << " -> ERROR: there are unmovable instructions between the "
-                  "loops.\n";
+        outs() << "Error: there are unmovable instructions between the "
+                  "loops, so they can't be made adjacent.\n";
         return false;
       }
     }
@@ -387,7 +387,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     const SCEV *TC2 = loopsTripCountMap[L2];
 
     if (isa<SCEVCouldNotCompute>(TC1) || isa<SCEVCouldNotCompute>(TC2)) {
-      outs() << "couldnt compute\n";
       return false;
     }
 
@@ -407,20 +406,10 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
 
   bool areControlFlowEquivalent(Loop *L1, Loop *L2, DominatorTree &DT,
                                 PostDominatorTree &PDT) {
-    // TODO: we may need to add a different check for when both loops are
-    // guarded -> this could be right
-
-    // BasicBlock *Pre1 = L1->getLoopPreheader();
-    // BasicBlock *Pre2 = L2->getLoopPreheader();
 
     auto Pre1 = getLoopEntry(L1);
     auto Pre2 = getLoopEntry(L2);
 
-    // outs() << "Pre1: ";
-    // Pre1->printAsOperand(outs());
-    // outs() << "\nPre2: ";
-    // Pre2->printAsOperand(outs());
-    // outs() << "\n";
     if (!Pre1 || !Pre2) {
       return false;
     }
@@ -537,7 +526,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
             // before L1, so we have a negative dependence
             if ((Distance > 0 && StepVal > 0) ||
                 (Distance < 0 && StepVal < 0)) {
-              outs() << " -> FOUND NEGATIVE DEPENDENCE\n";
               return true;
             }
           } else {
@@ -592,12 +580,18 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
   }
 
+  /**
+   * @brief fuses normal loops
+   *
+   * @param L1
+   * @param L2
+   * @param LI
+   * @return true
+   * @return false
+   */
   bool fuseLoops(Loop *L1, Loop *L2, LoopInfo &LI) {
     auto L1Header = L1->getHeader();
     auto L1HeaderTerminator = L1Header->getTerminator();
-    // auto L1InductionVar = L1->getInductionVariable(SE); for some reason it
-    // doesn't work
-    // auto L1InductionVar = findInductionVariable(L1);
     auto L1InductionVar = L1->getCanonicalInductionVariable();
     auto L1Latch = L1->getLoopLatch();
 
@@ -605,8 +599,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto L2HeaderTerminator = L2Header->getTerminator();
     auto L2ExitBlock = getLoopExit(L2);
     auto L2EntryBlock = getLoopEntry(L2);
-    // auto L2InductionVar = L2->getInductionVariable(SE);
-    // auto L2InductionVar = findInductionVariable(L2);
     auto L2InductionVar = L2->getCanonicalInductionVariable();
     auto L2Latch = L2->getLoopLatch();
 
@@ -707,6 +699,15 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return true;
   }
 
+  /**
+   * @brief fuses guarded loops
+   *
+   * @param L1
+   * @param L2
+   * @param LI
+   * @return true
+   * @return false
+   */
   bool fuseGuardedLoops(Loop *L1, Loop *L2, LoopInfo &LI) {
     auto L1Header = L1->getHeader();
     auto L1Latch = L1->getLoopLatch();
@@ -738,14 +739,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       outs() << "l2 body entry not found\n";
       return false;
     }
-    // -----------------------------------------------
 
     std::vector<BasicBlock *> L1LatchPreds(predecessors(L1Latch).begin(),
                                            predecessors(L1Latch).end());
     std::vector<BasicBlock *> L2LatchPreds(predecessors(L2Latch).begin(),
                                            predecessors(L2Latch).end());
 
-    // 1. Spostamento Nodi PHI
+    // phi nodes are managed like in the normal fusion
     for (PHINode &PN : llvm::make_early_inc_range(L2Header->phis())) {
       if (&PN == L2InductionVar) {
         PN.replaceAllUsesWith(L1InductionVar);
@@ -766,9 +766,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
-    // Qualsiasi blocco che prima puntava alla guardia di L2 (sia che si tratti
-    // del fallimento della guardia di L1, sia l'uscita normale di L1), ora
-    // scavalca L2 e va dritto al bypass globale.
+    // blocks pointing to the L2 Guard now point to the exit
     std::vector<BasicBlock *> L2GuardPreds(predecessors(L2GuardBB).begin(),
                                            predecessors(L2GuardBB).end());
     for (BasicBlock *Pred : L2GuardPreds) {
@@ -781,6 +779,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    // blocks pointing to the L1 Latch now point to the L2 Body
     for (BasicBlock *PredL1 : L1LatchPreds) {
       auto predTerminator = PredL1->getTerminator();
       for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
@@ -791,6 +790,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
+    // finally blocks pointing to the L2 Latch now point to the L1 Latch
     for (BasicBlock *PredL2 : L2LatchPreds) {
       auto predTerminator = PredL2->getTerminator();
       for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
@@ -803,7 +803,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       }
     }
 
-    // 4. Aggiornamento LoopInfo e SubLoops
+    // Updates loops info
     std::vector<Loop *> SubLoops = L2->getSubLoopsVector();
     for (Loop *SubLoop : SubLoops) {
       L2->removeChildLoop(SubLoop);
@@ -830,6 +830,19 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     LI.erase(L2);
     return true;
   }
+  /**
+   * @brief main function for loop fusion, it processes loops at each nest level
+   * by starting from the outer loops and exploring recursively the inner loops
+   *
+   * @param siblings
+   * @param DT
+   * @param PDT
+   * @param SE
+   * @param LI
+   * @param F
+   * @return true
+   * @return false
+   */
   bool processNestLevelLoops(std::vector<Loop *> &siblings, DominatorTree &DT,
                              PostDominatorTree &PDT, ScalarEvolution &SE,
                              LoopInfo &LI, Function &F) {
@@ -839,7 +852,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     // filtering loops that are not candidate for LF
     for (Loop *L : siblings) {
       if (L->isLoopSimplifyForm()) {
-        outs() << "loop inserito\n";
         candidateLoops.push_back(L);
       }
     }
@@ -848,7 +860,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (candidateLoops.size() >= 2) {
       // make sure the loops are ordered from first to last
       std::sort(candidateLoops.begin(), candidateLoops.end(),
-                [&](Loop *L1, Loop *L2) { // cattura 'this' per getLoopEntry
+                [&](Loop *L1, Loop *L2) {
                   return DT.dominates(getLoopEntry(L1), getLoopEntry(L2));
                 });
 
@@ -860,8 +872,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
             group.push_back(loop);
             addedToGroup = true;
             break;
-          } else {
-            outs() << "non cfe\n";
           }
         }
 
@@ -885,44 +895,42 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         auto nextLoop = group[baseIndex + 1];
 
         if (!hasSameTripCount(baseLoop, nextLoop)) {
-          outs() << " -> FALLITO: Trip count diverso o SCEVCouldNotCompute\n";
+          outs() << "Failed : Could not compute or different trip counts\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
         }
 
         if (hasNegativeDependencies(baseLoop, nextLoop, SE)) {
-          outs() << " -> FALLITO: Dipendenze negative trovate\n";
+          outs() << "Failed: negative dependencies found\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
         }
 
         if (hasScalarDependencies(baseLoop, nextLoop)) {
-          outs() << " -> FALLITO: Dipendenze scalari trovate\n";
+          outs() << "Failed: scalar dependencies found\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
         }
 
         if (!areAdjacent(baseLoop, nextLoop)) {
-          outs() << " -> FALLITO: Non sono adiacenti\n";
+          outs() << "Failed: loops are not adjacent\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
         }
 
-        outs() << " -> Tutti i check passati! Tento la fusione...\n";
+        outs() << "All checks completed, trying to fuse...\n";
         bool fusionSuccess = false;
         if (baseLoop->isGuarded()) {
-          outs() << "Guarded Fusion\n";
           fusionSuccess = fuseGuardedLoops(baseLoop, nextLoop, LI);
         } else {
-          outs() << "Normal Fusion\n";
           fusionSuccess = fuseLoops(baseLoop, nextLoop, LI);
         }
         if (fusionSuccess) {
-          outs() << " -> FUSIONE AVVENUTA CON SUCCESSO!\n";
+          outs() << "Loops successfully fused\n";
           group.erase(group.begin() + baseIndex + 1);
           fused = true;
           removeUnreachableBlocks(F);
@@ -934,7 +942,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           DT.recalculate(F);
           PDT.recalculate(F);
         } else {
-          outs() << " -> FUSIONE ABORTITA\n";
+          outs() << "Error while trying to fuse\n";
           baseIndex++;
           baseLoop = group[baseIndex];
         }
