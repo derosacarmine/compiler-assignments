@@ -183,9 +183,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return true
    * @return false
    */
-  bool areAdjacent(Loop *L1, Loop *L2) {
+  bool areAdjacent(Loop *L1, Loop *L2, SetVector<Instruction *> &toMoveBeforeL1,
+                   SetVector<Instruction *> &toMoveAfterL2) {
     BasicBlock *ExitL1 = getLoopExit(L1);
     BasicBlock *EntryL2 = getLoopEntry(L2);
+    toMoveBeforeL1.clear();
+    toMoveAfterL2.clear();
+
     bool isGuarded = L1->isGuarded();
 
     if (!ExitL1 || !EntryL2)
@@ -202,7 +206,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     BranchInst *BI1 = dyn_cast<BranchInst>(ExitL1->getTerminator());
-    if (!BI1 || (!isGuarded && !BI1->isUnconditional()))
+
+    if (!BI1)
       return false;
 
     // first case, exit and entry correspond
@@ -211,7 +216,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       // if there's an instruction or more between the loops, try to move
       // it/them
       if (!isBlockEmpty(ExitL1, BI1, isGuarded)) {
-        if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1)) {
+        if (!canMoveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1,
+                                               toMoveBeforeL1, toMoveAfterL2)) {
           outs() << "Error: there are unmovable instructions between the "
                     "loops, so they can't be made adjacent.\n";
           return false;
@@ -221,25 +227,31 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       return true;
     }
 
-    // only create BI2 if exitL1 and entryL2 aren't the same
+    // second case, exit and entry do not correspond, but they could still be
+    // adjacent if there aren't unmovable instructions in the middle
+
     BranchInst *BI2 = dyn_cast<BranchInst>(EntryL2->getTerminator());
-    if (!BI2 || (!isGuarded && !BI2->isUnconditional()))
+    if (!BI2 || !BI1->isUnconditional())
       return false;
 
-    // make sure that two loops are considered adjacent even with a
-    // "trampoline" block in the middle
+    // a redundant "trampoline" block could be in the middle
     BasicBlock *NextBB = BI1->getSuccessor(0);
     if (NextBB != EntryL2) {
       BranchInst *NextBI = dyn_cast<BranchInst>(NextBB->getTerminator());
       if (!NextBI || !NextBI->isUnconditional() ||
-          NextBI->getSuccessor(0) != EntryL2) {
+          NextBI->getSuccessor(0) != EntryL2 ||
+          !isBlockEmpty(NextBB, NextBI, false)) {
         return false;
       }
+      // BI1->setSuccessor(0, EntryL2);
     }
 
+    // finally we check for instructions between ExitL1 and EntryL2
     if (!isBlockEmpty(ExitL1, BI1, false) ||
         !isBlockEmpty(EntryL2, BI2, isGuarded)) {
-      if (!moveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1, EntryL2, BI2)) {
+      if (!canMoveInstructionsInBetweenLoops(L1, L2, ExitL1, BI1,
+                                             toMoveBeforeL1, toMoveAfterL2,
+                                             EntryL2, BI2)) {
         outs() << "Error: there are unmovable instructions between the "
                   "loops, so they can't be made adjacent.\n";
         return false;
@@ -270,12 +282,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
    * @return true
    * @return false
    */
-  bool moveInstructionsInBetweenLoops(Loop *L1, Loop *L2, BasicBlock *ExitL1,
-                                      BranchInst *BI1,
-                                      BasicBlock *EntryL2 = nullptr,
-                                      BranchInst *BI2 = nullptr) {
-    SetVector<Instruction *> toMoveBeforeL1;
-    SetVector<Instruction *> toMoveAfterL2;
+  bool canMoveInstructionsInBetweenLoops(
+      Loop *L1, Loop *L2, BasicBlock *ExitL1, BranchInst *BI1,
+      SetVector<Instruction *> &toMoveBeforeL1,
+      SetVector<Instruction *> &toMoveAfterL2, BasicBlock *EntryL2 = nullptr,
+      BranchInst *BI2 = nullptr) {
 
     std::vector<Instruction *> toCheckForCodeMotion;
 
@@ -301,6 +312,9 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       bool neededBeforeL1 = false;
       bool neededAfterL2 = false;
 
+      if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory()) {
+        return false;
+      }
       // checks if the instruction is needed after L2
       // if it is then we are forced to move it before L1
       if (isUsedInLoop(I, L2, false))
@@ -352,8 +366,21 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
                                   // move the instructions before L1
     }
 
-    // change name of Instruction *whereToMoveTo to something decent
+    return true;
+  }
 
+  /**
+   * @brief Moves given instructions before the first loop or after the second
+   * loop
+   *
+   * @param L1 first loop
+   * @param L2 second loop
+   * @param toMoveBeforeL1 instructions to move before the first loop
+   * @param toMoveAfterL2 instructions to move after the second loop
+   */
+  void moveInstructionsInBetweenLoops(Loop *L1, Loop *L2,
+                                      SetVector<Instruction *> &toMoveBeforeL1,
+                                      SetVector<Instruction *> &toMoveAfterL2) {
     BasicBlock *EntryL1 = getLoopEntry(L1);
     if (EntryL1) {
       Instruction *whereToMoveTo = EntryL1->getTerminator();
@@ -367,11 +394,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
       for (Instruction *I : toMoveAfterL2)
         I->moveBefore(whereToMoveTo);
     }
-
-    if (EntryL2 != nullptr)
-      BI1->setSuccessor(0, EntryL2);
-
-    return true;
   }
 
   /**
@@ -915,11 +937,17 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           continue;
         }
 
-        if (!areAdjacent(baseLoop, nextLoop)) {
+        SetVector<Instruction *> toMoveBeforeL1;
+        SetVector<Instruction *> toMoveAfterL2;
+
+        if (!areAdjacent(baseLoop, nextLoop, toMoveBeforeL1, toMoveAfterL2)) {
           outs() << "Failed: loops are not adjacent\n";
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
+        } else if (!toMoveAfterL2.empty() || !toMoveBeforeL1.empty()) {
+          moveInstructionsInBetweenLoops(baseLoop, nextLoop, toMoveBeforeL1,
+                                         toMoveAfterL2);
         }
 
         outs() << "All checks completed, trying to fuse...\n";

@@ -21,7 +21,7 @@ int fun(int n) {
 
   // conditions to be moved:
   // 1) to move back -> its operands must not be overwritten in the previos loop
-  // 2) to move after -> the next loop must not utilize the defined variable
+  // 2) to move after -> the next loop must not utilize/redefine the variable
   // 3) instructions dependent on each other must be on the same side
   int a = c + 12;
   int x = 10;
