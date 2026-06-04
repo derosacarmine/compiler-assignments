@@ -25,6 +25,7 @@
 #include <llvm-19/llvm/Support/Casting.h>
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <map>
@@ -616,6 +617,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto L1HeaderTerminator = L1Header->getTerminator();
     auto L1InductionVar = L1->getCanonicalInductionVariable();
     auto L1Latch = L1->getLoopLatch();
+    auto L1ExitBlock = getLoopExit(L1);
 
     auto L2Header = L2->getHeader();
     auto L2HeaderTerminator = L2Header->getTerminator();
@@ -664,7 +666,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     // the exit block of L1 is now the exit block of L2
-    if (L1HeaderTerminator->getSuccessor(0) == L2EntryBlock) {
+    if (L1HeaderTerminator->getSuccessor(0) == L1ExitBlock) {
       L1HeaderTerminator->setSuccessor(0, L2ExitBlock);
     } else {
       L1HeaderTerminator->setSuccessor(1, L2ExitBlock);
@@ -945,7 +947,9 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
           baseIndex++;
           baseLoop = group[baseIndex];
           continue;
-        } else if (!toMoveAfterL2.empty() || !toMoveBeforeL1.empty()) {
+        }
+
+        if (!toMoveAfterL2.empty() || !toMoveBeforeL1.empty()) {
           moveInstructionsInBetweenLoops(baseLoop, nextLoop, toMoveBeforeL1,
                                          toMoveAfterL2);
         }
@@ -988,6 +992,24 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return fused || childrenFused;
   }
 
+  /**
+   * @brief separates instructions from the latch, we use it especially for
+   * while loops to make sure instruction inserted in the first loop latch are
+   * not put after the second loop body when fused
+   *
+   * @param L
+   * @param DT
+   * @param LI
+   */
+  void prepareLoopLatch(Loop *L, DominatorTree &DT, LoopInfo &LI) {
+    auto latch = L->getLoopLatch();
+    auto header = L->getHeader();
+    if (latch == header || latch->size() > 2) {
+      // latch terminator is inserted in a different block
+      latch = SplitBlock(latch, latch->getTerminator(), &DT, &LI);
+    }
+  }
+
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
     LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
     ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
@@ -995,8 +1017,11 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
     for (auto L : LI.getLoopsInPreorder()) {
+      if (!L->isLoopSimplifyForm())
+        continue;
       auto backedgeLoop = SE.getBackedgeTakenCount(L);
       loopsTripCountMap[L] = backedgeLoop;
+      prepareLoopLatch(L, DT, LI);
     }
 
     bool changed =
