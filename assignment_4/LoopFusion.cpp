@@ -585,6 +585,13 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     return false;
   }
 
+  bool isLoopDoWhile(Loop *L1) {
+    if (auto branchHeader =
+            dyn_cast<BranchInst>(L1->getHeader()->getTerminator()))
+      return branchHeader->getNumSuccessors() <= 1;
+
+    return false;
+  }
   /**
    * @brief updates the phi nodes modifying the label of OldPred with the
    * NewPred label
@@ -627,6 +634,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto L2Latch = L2->getLoopLatch();
 
     if (!L1InductionVar || !L2InductionVar) {
+      outs() << "Induction not found\n";
       return false;
     }
 
@@ -705,9 +713,7 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     }
 
     /* Should move blocks that belong to L2 to L1, except the header and the
-     latch (maybe
-     * there are other BBs idk)
-     WARNING: I'm not sure it updates correctly, it's a nightmare to debug ts*/
+     latch */
     std::vector<BasicBlock *> blocksToMove(L2->block_begin(), L2->block_end());
     for (BasicBlock *BB : blocksToMove) {
       if (BB != L2Header && BB != L2Latch) {
@@ -737,8 +743,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     auto L1Latch = L1->getLoopLatch();
     auto L1Preheader = L1->getLoopPreheader();
     auto L1InductionVar = L1->getCanonicalInductionVariable();
-    auto L1GuardBr = L1->getLoopGuardBranch();
-    auto L1GuardBB = L1GuardBr->getParent();
 
     auto L2Header = L2->getHeader();
     auto L2Latch = L2->getLoopLatch();
@@ -854,6 +858,133 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     LI.erase(L2);
     return true;
   }
+
+  /**
+   * @brief fuse function for when we have two do while loops
+   *
+   * @param L1
+   * @param L2
+   * @param LI
+   * @return true
+   * @return false
+   */
+  bool fuseDoWhile(Loop *L1, Loop *L2, LoopInfo &LI) {
+    auto L1Header = L1->getHeader();
+    auto L1Latch = L1->getLoopLatch();
+    auto L1Preheader = L1->getLoopPreheader();
+    auto L1InductionVar = L1->getCanonicalInductionVariable();
+    auto L1LatchBr = dyn_cast<BranchInst>(L1Latch->getTerminator());
+
+    auto L2Header = L2->getHeader();
+    auto L2Latch = L2->getLoopLatch();
+    auto L2Preheader = L2->getLoopPreheader();
+    auto L2InductionVar = L2->getCanonicalInductionVariable();
+    auto L2LatchBr = dyn_cast<BranchInst>(L2Latch->getTerminator());
+    // auto L2GuardBr = L2->getLoopGuardBranch();
+    // auto L2GuardBB = L2GuardBr->getParent();
+
+    if (!L1InductionVar || !L2InductionVar) {
+      outs() << "Induction not found\n";
+      return false;
+    }
+
+    // the exit of the second loop guard
+    BasicBlock *L2Bypass = (L2LatchBr->getSuccessor(0) == L2Header)
+                               ? L2LatchBr->getSuccessor(1)
+                               : L2LatchBr->getSuccessor(0);
+
+    BasicBlock *L2BodyEntry = L2Header;
+
+    if (!L2BodyEntry) {
+      outs() << "l2 body entry not found\n";
+      return false;
+    }
+
+    std::vector<BasicBlock *> L1LatchPreds(predecessors(L1Latch).begin(),
+                                           predecessors(L1Latch).end());
+    std::vector<BasicBlock *> L2LatchPreds(predecessors(L2Latch).begin(),
+                                           predecessors(L2Latch).end());
+
+    // phi nodes are managed like in the normal fusion
+    for (PHINode &PN : llvm::make_early_inc_range(L2Header->phis())) {
+      if (&PN == L2InductionVar) {
+        PN.replaceAllUsesWith(L1InductionVar);
+        PN.eraseFromParent();
+      } else {
+        Instruction *InsertPt = L1Header->getFirstNonPHI();
+        PN.moveBefore(InsertPt);
+
+        int entryIdx = PN.getBasicBlockIndex(L2Preheader);
+        if (entryIdx >= 0) {
+          PN.setIncomingBlock(entryIdx, L1Preheader);
+        }
+
+        int latchIdx = PN.getBasicBlockIndex(L2Latch);
+        if (latchIdx >= 0) {
+          PN.setIncomingBlock(latchIdx, L1Latch);
+        }
+      }
+    }
+
+    // the exit block of L1 is now the exit block of L2
+    if (L1LatchBr->getSuccessor(0) == L1Header) {
+      L1LatchBr->setSuccessor(1, L2Bypass);
+    } else {
+      L1LatchBr->setSuccessor(0, L2Bypass);
+    }
+    updatePhiNodes(L2Bypass, L2Latch, L1Latch);
+
+    // blocks pointing to the L1 Latch now point to the L2 Body
+    for (BasicBlock *PredL1 : L1LatchPreds) {
+      auto predTerminator = PredL1->getTerminator();
+      for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
+        if (predTerminator->getSuccessor(i) == L1Latch) {
+          predTerminator->setSuccessor(i, L2BodyEntry);
+          updatePhiNodes(L2BodyEntry, L2Header, PredL1);
+        }
+      }
+    }
+
+    // finally blocks pointing to the L2 Latch now point to the L1 Latch
+    for (BasicBlock *PredL2 : L2LatchPreds) {
+      auto predTerminator = PredL2->getTerminator();
+      for (unsigned i = 0; i < predTerminator->getNumSuccessors(); i++) {
+        if (predTerminator->getSuccessor(i) == L2Latch) {
+          predTerminator->setSuccessor(i, L1Latch);
+          for (BasicBlock *OldPredL1 : L1LatchPreds) {
+            updatePhiNodes(L1Latch, OldPredL1, PredL2);
+          }
+        }
+      }
+    }
+
+    // Updates loops info
+    std::vector<Loop *> SubLoops = L2->getSubLoopsVector();
+    for (Loop *SubLoop : SubLoops) {
+      L2->removeChildLoop(SubLoop);
+      L1->addChildLoop(SubLoop);
+    }
+
+    std::vector<BasicBlock *> blocksToMove;
+    for (BasicBlock *BB : L2->getBlocks()) {
+      if (LI.getLoopFor(BB) == L2) {
+        blocksToMove.push_back(BB);
+      }
+    }
+
+    for (BasicBlock *BB : blocksToMove) {
+      if (BB != L2Latch && BB != L2Preheader) {
+        L2->removeBlockFromLoop(BB);
+        L1->addBasicBlockToLoop(BB, LI);
+      }
+    }
+
+    if (Loop *ParentLoop = L2->getParentLoop())
+      ParentLoop->removeChildLoop(L2);
+
+    LI.erase(L2);
+    return true;
+  }
   /**
    * @brief main function for loop fusion, it processes loops at each nest level
    * by starting from the outer loops and exploring recursively the inner loops
@@ -958,6 +1089,8 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
         bool fusionSuccess = false;
         if (baseLoop->isGuarded()) {
           fusionSuccess = fuseGuardedLoops(baseLoop, nextLoop, LI);
+        } else if (isLoopDoWhile(baseLoop) && isLoopDoWhile(nextLoop)) {
+          fusionSuccess = fuseDoWhile(baseLoop, nextLoop, LI);
         } else {
           fusionSuccess = fuseLoops(baseLoop, nextLoop, LI);
         }
