@@ -725,7 +725,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (Loop *ParentLoop = L2->getParentLoop())
       ParentLoop->removeChildLoop(L2);
 
-    LI.erase(L2);
     return true;
   }
 
@@ -855,7 +854,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (Loop *ParentLoop = L2->getParentLoop())
       ParentLoop->removeChildLoop(L2);
 
-    LI.erase(L2);
     return true;
   }
 
@@ -982,7 +980,6 @@ struct LoopFusion : PassInfoMixin<LoopFusion> {
     if (Loop *ParentLoop = L2->getParentLoop())
       ParentLoop->removeChildLoop(L2);
 
-    LI.erase(L2);
     return true;
   }
   /**
